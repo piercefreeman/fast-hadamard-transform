@@ -1706,3 +1706,18 @@ Result:
 - fp16 dim 4096 regressed to 233.440 us and bf16 dim 4096 regressed to 233.728 us.
 - Adjacent dims and fp32 guardrails were normal.
 - Decision: reject and keep the standard launch bounds for dim 4096.
+
+## Experiment 122: No Launch Bounds for 4096/8192
+
+Hypothesis: the remaining slow default fp16/bf16 4096/8192 cells and fp32 8192 may be constrained by the generic `__launch_bounds__` annotation. Removing launch bounds for only those routes may let ptxas choose a better register/scheduling tradeoff without changing arithmetic precision.
+
+Change:
+- Temporarily added an otherwise identical main-kernel wrapper without `__launch_bounds__`.
+- Routed default fp16/bf16 dims 4096 and 8192 through it, preserving the accepted 4096 double-buffered exchange.
+- Routed fp32 dim 8192 through it, with fp32 dim 4096 included as a guardrail.
+
+Result:
+- Artifact: `benchmark_results/exp122_no_launch_bounds_4096_8192_h200_20260528.json`.
+- fp32 dim 8192 regressed to 142.128 us versus 141.376 us in the accepted full artifact.
+- fp16 dim 4096 regressed slightly to 231.984 us, while fp16 dim 8192 and bf16 dim 4096 moved only at noise scale.
+- Decision: reject and keep the standard launch-bounds annotations.
