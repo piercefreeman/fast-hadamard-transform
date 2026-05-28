@@ -1735,3 +1735,53 @@ Result:
 - fp32 dim 8192 regressed to 163.216 us versus 141.376 us in the accepted full artifact.
 - fp32 dim 4096 and 16384 guardrails stayed near the expected range.
 - Decision: reject and keep fp32 dim 8192 on the 256-thread launch.
+
+## Experiment 124: Broad Grid-Constant Params
+
+Hypothesis: CUDA `__grid_constant__` may reduce per-thread parameter traffic or local copies for the by-value `HadamardParamsBase` struct. This is a Hopper-friendly codegen change only; it does not change arithmetic precision, shared-memory value type, or output rounding.
+
+Change:
+- Temporarily marked the main default kernel params and specialized bf16 32768 params as `__grid_constant__`.
+- Temporarily changed the main kernel body to take params by const reference so the grid-constant parameter would not be copied again.
+
+Result:
+- Artifact: `benchmark_results/exp124_grid_constant_params_large_h200_20260528.json`.
+- Positive signals: fp16 dim 8192 improved to 231.808 us, bf16 dim 16384 improved to 234.000 us, and fp32 dim 32768 improved to 194.064 us.
+- Broad regressions made the route unusable as-is: fp32 dim 4096 regressed to 146.496 us and fp32 dim 16384 to 165.584 us.
+- Decision: reject the broad route and narrow the grid-constant entry to candidate cells only.
+
+## Experiment 125: Selective Grid-Constant Params With Reference Body
+
+Hypothesis: applying the grid-constant entry only to the positive cells from Experiment 124 may keep the wins while avoiding broad fp32 regressions.
+
+Change:
+- Added a separate grid-constant main-kernel wrapper.
+- Routed only default fp16 dim 8192, guarded bf16 dim 16384 pre-scale, and fp32 dim 32768 through it.
+- Kept the main kernel body on the temporary const-reference params form.
+
+Result:
+- Targeted artifact: `benchmark_results/exp125_selective_grid_constant_params_h200_20260528.json`.
+- Full artifacts:
+  - `benchmark_results/current_default_precision_exp125_selective_grid_constant_full_h200_20260528.json`: 1.2861x over baseline.
+  - `benchmark_results/current_default_precision_exp125_selective_grid_constant_full_h200_20260528_repeat2.json`: 1.2836x over baseline.
+- The candidate cells repeated well, but the full repeat fell behind the accepted 1.2844x artifact because unrelated fp32 guardrails drifted worse.
+- Decision: reject this form and restore the regular body params ABI before retesting the selective grid-constant wrapper.
+
+## Experiment 126: Selective Grid-Constant Params With By-Value Body
+
+Hypothesis: keeping the original by-value body params preserves codegen for normal routes, while a separate grid-constant global entry can still improve the narrow cells identified in Experiment 124.
+
+Change:
+- Restored the regular main kernel body to by-value `HadamardParamsBase` params.
+- Kept the separate grid-constant main-kernel wrapper.
+- Routed only default fp16 dim 8192, guarded bf16 dim 16384 pre-scale, and fp32 dim 32768 through the grid-constant wrapper.
+
+Result:
+- Targeted artifact: `benchmark_results/exp126_grid_constant_byvalue_body_h200_20260528.json`.
+- Full artifacts:
+  - `benchmark_results/current_default_precision_exp126_grid_constant_byvalue_full_h200_20260528.json`: 1.2872x over baseline.
+  - `benchmark_results/current_default_precision_exp126_grid_constant_byvalue_full_h200_20260528_repeat2.json`: 1.2871x over baseline.
+- Repeat-2 dtype speedups over baseline: fp16 1.3823x, bf16 1.3702x, fp32 1.1259x.
+- Repeat-2 candidate timings: fp16 dim 8192 231.264 us, bf16 dim 16384 233.568 us, fp32 dim 32768 194.560 us.
+- Correctness/unit verification after final build: `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py`, 55 passed.
+- Decision: accept. This is precision-preserving because it changes only kernel parameter placement/codegen and keeps float-intermediate arithmetic and output dtype conversion unchanged.

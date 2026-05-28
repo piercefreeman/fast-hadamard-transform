@@ -647,6 +647,17 @@ void fast_hadamard_transform_kernel(HadamardParamsBase params) {
         params, smem_);
 }
 
+template<typename Ktraits, bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false,
+         bool kUseExactHalfIO = false, bool kPreScale = false>
+__global__ __launch_bounds__(Ktraits::kNThreads)
+void fast_hadamard_transform_grid_constant_kernel(
+    const __grid_constant__ HadamardParamsBase params) {
+    extern __shared__ char smem_[];
+    fast_hadamard_transform_kernel_body<Ktraits, kUseConditionalWarp, kUseDoubleBufferExchange, kUseExactHalfIO,
+                                        kPreScale>(
+        params, smem_);
+}
+
 __global__ __launch_bounds__(512)
 void fast_hadamard_transform_bfloat16_32768_restrict_kernel(HadamardParamsBase params) {
     using input_t = at::BFloat16;
@@ -1389,6 +1400,24 @@ void fast_hadamard_transform_launch(HadamardParamsBase &params, cudaStream_t str
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
+template<int kNThreads, int kLogN, typename input_t,
+         bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false,
+         bool kUseExactHalfIO = false, bool kPreScale = false>
+void fast_hadamard_transform_grid_constant_launch(HadamardParamsBase &params, cudaStream_t stream) {
+    using Ktraits = fast_hadamard_transform_kernel_traits<kNThreads, kLogN, input_t>;
+    constexpr int kSmemSize = Ktraits::kSmemSize * (kUseDoubleBufferExchange ? 2 : 1);
+    dim3 grid(params.batch);
+    auto kernel = &fast_hadamard_transform_grid_constant_kernel<Ktraits, kUseConditionalWarp,
+                                                                 kUseDoubleBufferExchange,
+                                                                 kUseExactHalfIO, kPreScale>;
+    if (kSmemSize >= 48 * 1024) {
+        C10_CUDA_CHECK(cudaFuncSetAttribute(
+            kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+    }
+    kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
 void fast_hadamard_transform_bfloat16_32768_restrict_launch(HadamardParamsBase &params, cudaStream_t stream) {
     using Ktraits = fast_hadamard_transform_kernel_traits<512, 15, at::BFloat16>;
     constexpr int kSmemSize = Ktraits::kSmemSize;
@@ -1530,7 +1559,7 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
             if (params.fast_low_precision) {
                 fast_hadamard_transform_half2_launch<256, 13>(params, stream);
             } else {
-                fast_hadamard_transform_launch<256, 13, input_t>(params, stream);
+                fast_hadamard_transform_grid_constant_launch<256, 13, input_t>(params, stream);
             }
         } else if constexpr (std::is_same_v<input_t, at::BFloat16>) {
             if (params.fast_low_precision) {
@@ -1554,7 +1583,7 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
             if (params.fast_low_precision) {
                 fast_hadamard_transform_bfloat162_launch<256, 14>(params, stream);
             } else if (params.dim == 16 * 1024 && params.scale == 0.0078125f) {
-                fast_hadamard_transform_launch<256, 14, input_t, false, false, false, true>(params, stream);
+                fast_hadamard_transform_grid_constant_launch<256, 14, input_t, false, false, false, true>(params, stream);
             } else {
                 fast_hadamard_transform_launch<256, 14, input_t>(params, stream);
             }
@@ -1563,7 +1592,7 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
         }
     } else if (params.log_N == 15) {
         if constexpr (std::is_same_v<input_t, float>) {
-            fast_hadamard_transform_launch<512, 15, input_t>(params, stream);
+            fast_hadamard_transform_grid_constant_launch<512, 15, input_t>(params, stream);
         } else if constexpr (std::is_same_v<input_t, at::Half>) {
             if (params.fast_low_precision) {
                 fast_hadamard_transform_half2_launch<512, 15>(params, stream);
