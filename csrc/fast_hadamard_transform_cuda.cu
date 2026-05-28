@@ -433,7 +433,7 @@ struct FloatIntermediateWarpIO<kNChunks, 8, at::BFloat16> {
     }
 };
 
-template<typename Ktraits, bool kUseConditionalWarp = false>
+template<typename Ktraits, bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false>
 __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardParamsBase params, char *smem_) {
     constexpr int kNThreads = Ktraits::kNThreads;
     constexpr int kNElts = Ktraits::kNElts;
@@ -463,6 +463,8 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
         kNElts == 8 && !(std::is_same_v<input_t, at::BFloat16> && Ktraits::N == 32 * 1024);
 
     vec_t *smem_exchange = reinterpret_cast<vec_t *>(smem_);
+    vec_t *smem_exchange_post = reinterpret_cast<vec_t *>(
+        smem_ + (kUseDoubleBufferExchange ? Ktraits::kSmemExchangeSize : 0));
 
     const int batch_id = blockIdx.x;
     input_t *x = reinterpret_cast<input_t *>(params.x_ptr) + batch_id * params.x_batch_stride;
@@ -495,7 +497,7 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
             hadamard_mult_warp<kLogNWarps, 0, kNChunks, kNElts>(x_vals);
         }
         exchange_smem_pre<kNChunks, kChunksPerExchange, kNElts, kWarpSize, kNWarps,
-                           false, kSkipInitialPreSync, vec_t>(x_vals, smem_exchange);
+                           false, kUseDoubleBufferExchange, vec_t>(x_vals, smem_exchange_post);
     }
 
     if constexpr (kNChunks > 1) {
@@ -532,11 +534,11 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
     }
 }
 
-template<typename Ktraits, bool kUseConditionalWarp = false>
+template<typename Ktraits, bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false>
 __global__ __launch_bounds__(Ktraits::kNThreads)
 void fast_hadamard_transform_kernel(HadamardParamsBase params) {
     extern __shared__ char smem_[];
-    fast_hadamard_transform_kernel_body<Ktraits, kUseConditionalWarp>(params, smem_);
+    fast_hadamard_transform_kernel_body<Ktraits, kUseConditionalWarp, kUseDoubleBufferExchange>(params, smem_);
 }
 
 template<typename Ktraits>
@@ -1203,12 +1205,13 @@ void fast_hadamard_transform_one_warp_kernel(HadamardParamsBase params) {
     FloatIntermediateWarpIO<kNChunks, kNElts, input_t>::store(out, x_vals, params.dim, lane_id, params.scale);
 }
 
-template<int kNThreads, int kLogN, typename input_t, bool kUseConditionalWarp = false>
+template<int kNThreads, int kLogN, typename input_t,
+         bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false>
 void fast_hadamard_transform_launch(HadamardParamsBase &params, cudaStream_t stream) {
     using Ktraits = fast_hadamard_transform_kernel_traits<kNThreads, kLogN, input_t>;
-    constexpr int kSmemSize = Ktraits::kSmemSize;
+    constexpr int kSmemSize = Ktraits::kSmemSize * (kUseDoubleBufferExchange ? 2 : 1);
     dim3 grid(params.batch);
-    auto kernel = &fast_hadamard_transform_kernel<Ktraits, kUseConditionalWarp>;
+    auto kernel = &fast_hadamard_transform_kernel<Ktraits, kUseConditionalWarp, kUseDoubleBufferExchange>;
     if (kSmemSize >= 48 * 1024) {
         C10_CUDA_CHECK(cudaFuncSetAttribute(
             kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
@@ -1326,13 +1329,13 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
             if (params.fast_low_precision) {
                 fast_hadamard_transform_half2_launch<256, 12>(params, stream);
             } else {
-                fast_hadamard_transform_launch<256, 12, input_t>(params, stream);
+                fast_hadamard_transform_launch<256, 12, input_t, false, true>(params, stream);
             }
         } else if constexpr (std::is_same_v<input_t, at::BFloat16>) {
             if (params.fast_low_precision) {
                 fast_hadamard_transform_bfloat162_launch<256, 12>(params, stream);
             } else {
-                fast_hadamard_transform_launch<256, 12, input_t>(params, stream);
+                fast_hadamard_transform_launch<256, 12, input_t, false, true>(params, stream);
             }
         } else {
             fast_hadamard_transform_lowp_exchange_launch<256, 12, input_t>(params, stream);

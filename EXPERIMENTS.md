@@ -1016,3 +1016,81 @@ Result:
 - fp32 dim 32768 regressed to 204.192 us, and fp32 dim 4096 regressed to 144.800 us.
 - One-warp conditional add/sub regressed the important fp16/bf16 dim 2048 cases to 144.336 us and 144.608 us.
 - Decision: reject both retests. Keep conditional add/sub only on the previously accepted fp32 dim 16384 and bf16 dim 32768 routes.
+
+## Experiment 071: Double-Buffered Exchange for Large 16-Bit Defaults
+
+Hypothesis: in one-round shared-memory exchanges, the post-warp exchange can write to a fresh shared-memory buffer and skip its initial `__syncthreads()`. This preserves float arithmetic and only changes synchronization and shared-memory allocation.
+
+Change:
+- Added an optional second exchange buffer.
+- Routed default fp16/bf16 dims 4096, 8192, and 16384 through the double-buffered post-exchange.
+
+Result:
+- Artifact: `benchmark_results/exp071_double_buffer_exchange_default_large_h200_20260528.json`.
+- Dim 4096 improved modestly: fp16 232.064 us, bf16 231.472 us.
+- Dim 8192 was neutral to worse, and dim 16384 regressed badly because doubling 64 KiB exchange storage to 128 KiB reduced occupancy.
+- Decision: reject the broad route and narrow to dim 4096 only.
+
+## Experiment 072: Double-Buffered Exchange Only for 4096
+
+Hypothesis: dim 4096 is small enough that the extra 16 KiB post-exchange buffer does not meaningfully hurt occupancy, while still saving one CTA barrier.
+
+Change:
+- Kept double-buffered post-exchange only for default fp16/bf16 dim 4096.
+- Restored dims 8192 and 16384 to the single-buffer route.
+
+Result:
+- Artifact: `benchmark_results/exp072_double_buffer_exchange_default_4096_only_h200_20260528.json`.
+- fp16 dim 4096 measured 231.888 us and bf16 dim 4096 measured 231.424 us.
+- Guardrail dims 8192 and 16384 returned near the prior accepted range.
+- Decision: accept the 4096-only route.
+
+## Experiment 073: fp32 Double-Buffered Exchange
+
+Hypothesis: fp32 large kernels pay one more exchange barrier than the 16-bit paths, so double-buffered post-exchange may help fp32 dims 4096 through 16384.
+
+Change:
+- Temporarily enabled double-buffered post-exchange for fp32 dims 4096, 8192, and 16384.
+
+Result:
+- Artifact: `benchmark_results/exp073_fp32_double_buffer_exchange_large_h200_20260528.json`.
+- fp32 dim 4096 regressed to 160.736 us and fp32 dim 16384 regressed to 210.464 us.
+- fp32 dim 8192 was effectively neutral.
+- Decision: reject. Keep fp32 on the single-buffer route.
+
+## Experiment 074: Exact-Dimension Vectorized I/O
+
+Hypothesis: benchmarked power-of-two cases have `dim == Ktraits::N`, so specialized vector I/O can skip boundary checks and zero initialization. This must not apply to padded non-power dimensions.
+
+Change:
+- Temporarily removed boundary checks from specialized vector I/O helpers to measure the upside on exact power-of-two cases.
+
+Result:
+- Artifact: `benchmark_results/exp074_exact_dim_vectorized_io_h200_20260528.json`.
+- Follow-up safe-routing artifact: `benchmark_results/current_default_precision_exp076_double_buffer_exact_io_full_h200_20260528.json`, 118.640 us geometric mean and 1.278x over baseline.
+- Some small fp16/bf16 cases improved, and fp16 dim 32768 improved to 306.896 us.
+- Several larger and fp32 cases regressed, including fp32 dim 8192 at 159.152 us and bf16 dim 16384 at 259.856 us.
+- Decision: reject the exact-I/O route. Even with safe runtime routing for selected exact dimensions, the full sweep did not beat the simpler 4096 double-buffer route.
+
+## Experiment 075: 128-Thread 4096 Double-Buffer Launch
+
+Hypothesis: dim 4096 may benefit from fewer warps per block when paired with the double-buffered exchange.
+
+Change:
+- Temporarily changed default fp16/bf16 dim 4096 from 256 threads to 128 threads, keeping double-buffered post-exchange.
+
+Result:
+- Artifact: `benchmark_results/exp075_default_4096_128_threads_double_buffer_h200_20260528.json`.
+- fp16 dim 4096 regressed to 252.464 us and bf16 dim 4096 to 249.360 us.
+- Decision: reject and restore the 256-thread dim 4096 route.
+
+## Current Default Precision State After Experiment 076
+
+Result:
+- Full default precision-preserving artifacts:
+  - `benchmark_results/current_default_precision_exp076_double_buffer_4096_full_h200_20260528.json`: 118.558 us geometric mean, 1.279x over baseline.
+  - `benchmark_results/current_default_precision_exp076_double_buffer_4096_full_h200_20260528_repeat2.json`: 118.753 us geometric mean, 1.276x over baseline.
+- Dtype geometric-mean speedups in the repeat artifact: fp16 1.376x, bf16 1.348x, fp32 1.122x.
+- Correctness/unit verification after final rebuild: `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py`, 55 passed.
+- Decision: keep the 4096-only double-buffered exchange. It is synchronization-only and does not change arithmetic precision.
+- The default precision-preserving path remains far short of the requested 50% aggregate speedup.
