@@ -1485,3 +1485,16 @@ Result:
 - bf16 dim 32768 measured 325.856 us versus 326.064 us in the Exp104 targeted run, which is inside the run's 4.832 us IQR and not a meaningful improvement.
 - fp16 and fp32 guardrails were normal.
 - Decision: reject and keep the accepted guarded `__ldg` helper from Experiment 104.
+
+## Experiment 106: fp16 32768 Exact Read-Only Load
+
+Hypothesis: the accepted fp16 dim 32768 exact-I/O route may benefit from using `__ldg` for its read-only vector input load while keeping float intermediates and the same output conversion.
+
+Change:
+- Temporarily changed `load_input_half_exact` to use `__ldg` for the exact fp16 input vector load.
+
+Result:
+- Artifact: `benchmark_results/exp106_fp16_32768_exact_ldg_load_h200_20260528.json`.
+- fp16 dim 32768 regressed to 311.808 us versus the accepted roughly 306-307 us range.
+- bf16 and fp32 guardrails were normal.
+- Decision: reject and restore the normal exact fp16 load.
