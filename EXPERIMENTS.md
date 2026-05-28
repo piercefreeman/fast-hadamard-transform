@@ -1156,3 +1156,60 @@ Result:
   - fp32 dim 2048 max abs 0.000000715 and dim 32768 max abs 0.000003099.
 - Decision: keep the exact-I/O routes for fp16 dim 32768 and bf16 dim 2048. They remove boundary work only for exact power-of-two dimensions and preserve the same float-intermediate arithmetic.
 - The default precision-preserving path remains about 27.9% faster than baseline, still well short of the requested 50% aggregate target.
+
+## Experiment 082: Two-Min-Block Launch Bounds for 8192 and 16384
+
+Hypothesis: default fp16/bf16 dims 8192 and 16384 may be occupancy-limited after the vectorized I/O changes, so adding `__launch_bounds__(threads, 2)` to those main-kernel routes may improve resident blocks without changing arithmetic.
+
+Change:
+- Temporarily routed default fp16/bf16 dims 8192 and 16384 through an otherwise identical main kernel annotated with `__launch_bounds__(Ktraits::kNThreads, 2)`.
+
+Result:
+- Artifact: `benchmark_results/exp082_default_8192_16384_min_blocks2_h200_20260528.json`.
+- fp16 dim 8192 regressed to 244.128 us and fp16 dim 16384 regressed to 269.104 us.
+- bf16 dim 8192 regressed to 241.728 us and bf16 dim 16384 regressed to 271.088 us.
+- Decision: reject and restore the standard launches.
+
+## Experiment 083: Main-Kernel Shared-Memory Carveout
+
+Hypothesis: the remaining large default kernels are exchange-heavy enough that preferring maximum shared-memory carveout may improve the fp16/bf16 and fp32 main-kernel routes without changing arithmetic.
+
+Change:
+- Temporarily set `cudaFuncAttributePreferredSharedMemoryCarveout` to `cudaSharedmemCarveoutMaxShared` for main-kernel launches using at least 16 KiB of dynamic shared memory.
+
+Result:
+- Artifact: `benchmark_results/exp083_main_kernel_smem_carveout_h200_20260528.json`.
+- The targeted large cases were neutral to slightly slower. Examples: fp16 dim 8192 was 237.296 us, bf16 dim 32768 was 342.368 us, fp32 dim 16384 was 148.336 us, and fp32 dim 32768 was 195.888 us.
+- Decision: reject and restore the prior launch attributes.
+
+## Current Fast-Low-Precision State After Experiment 083
+
+Result:
+- Full opt-in fast-low-precision artifact: `benchmark_results/current_fast_low_precision_after_exp083_restore_full_h200_20260528.json`.
+- Geometric-mean speedup versus `benchmark_results/baseline_unmodified_h200_20260528.json`: 1.504x across all 24 benchmark cases.
+- Dtype geometric-mean speedups: fp16 1.739x, bf16 1.738x, fp32 1.125x.
+- This meets the aggregate 50% target only for the opt-in lower-precision arithmetic route. The default precision-preserving path remains around 1.279x.
+
+## Experiment 084: Integer Log2 Parameter Setup
+
+Hypothesis: the event-based benchmark may include CPU enqueue/setup delay before the CUDA kernel is submitted, so replacing the per-call floating-point `ceil(log2(...))` setup with an integer helper may improve all dtypes in small dimensions without changing GPU arithmetic.
+
+Change:
+- Temporarily replaced `int(ceil(std::log2(dim / multiple)))` with an integer ceil-log2 loop in `set_hadamard_params`.
+
+Result:
+- Artifact: `benchmark_results/exp084_integer_log2_setup_small_h200_20260528.json`.
+- The small-dimension target was mixed and not a real improvement: fp16/bf16 were neutral to slightly slower, while fp32 moved only at noise scale.
+- Decision: reject and restore the previous setup expression.
+
+## Experiment 085: bf16 32768 Pre-Exchange Sync Skip Retest
+
+Hypothesis: later default-kernel changes may have altered the earlier bf16 dim 32768 result, making it worth retesting the precision-preserving initial pre-exchange barrier skip for that route.
+
+Change:
+- Temporarily enabled the initial pre-exchange sync skip for all `kNElts == 8` main kernels, including bf16 dim 32768.
+
+Result:
+- Artifact: `benchmark_results/exp085_bf16_32768_pre_sync_skip_retest_h200_20260528.json`.
+- bf16 dim 32768 regressed to 344.240 us; fp16 dim 32768 was neutral at 306.880 us.
+- Decision: reject and keep the existing bf16 dim 32768 exception.
