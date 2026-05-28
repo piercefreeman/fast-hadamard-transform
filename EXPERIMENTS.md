@@ -2133,3 +2133,19 @@ Result:
 - Guardrails were normal: fp16 dim 16384 245.600 us, bf16 dim 8192 235.968 us, bf16 dim 16384 233.856 us, fp32 dim 8192 142.320 us, and fp32 dim 16384 149.248 us.
 - Precision note: this experiment preserved float intermediates and standard fp16 output conversion. It changed only the global input load cache path for one exact route.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
+
+## Experiment 147: fp16 16384 Pre-Scale Route
+
+Hypothesis: default fp16 dim 16384 has exact scale `1 / 128` (`params.scale == 0.0078125f`), analogous to the accepted bf16 dim 16384 pre-scale route. A guarded fp16 16384 pre-scale path might reduce output conversion work while preserving float intermediates and standard fp16 output rounding.
+
+Change:
+- Temporarily routed only default fp16 dim 16384 with `params.scale == 0.0078125f` through `fast_hadamard_transform_launch<256, 14, input_t, false, false, false, true>`.
+- Left fp16 dim 8192/32768, bf16, fp32, and `fast_low_precision=True` native half2 routes unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp147_fp16_16384_prescale_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- fp16 dim 16384 measured 246.576 us versus 245.792 us in the accepted Exp139 repeat2 artifact, so the intended cell regressed.
+- Neighboring guardrails stayed normal: fp16 dim 8192 231.440 us, fp16 dim 32768 306.848 us, bf16 dim 8192 235.680 us, bf16 dim 16384 234.112 us, bf16 dim 32768 325.552 us, fp32 dim 8192 141.888 us, fp32 dim 16384 147.936 us, and fp32 dim 32768 194.672 us.
+- Precision note: this experiment preserved float intermediates and standard fp16 output conversion. It only moved the exact power-of-two scale into the float path for one guarded fp16 dimension, so the regression is performance/codegen-related rather than a precision tradeoff.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
