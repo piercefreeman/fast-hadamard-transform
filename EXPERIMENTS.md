@@ -1975,3 +1975,28 @@ Result:
 - Unit verification after final build: `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py`, 55 passed in 158.06s.
 - Precision note: this route keeps float intermediates and the standard dtype output conversion. It changes the on-chip layout and removes shared-memory exchange for dim 4096; it does not use native half2/bfloat162 arithmetic.
 - Decision: accept. The default precision-preserving path improves from the Exp126 repeat2 speedup of 1.287149x to 1.316053x-1.317696x. The requested 1.5x default target remains unmet; from the repeat2 value, another roughly 13.98% speedup from here is still required.
+
+## Experiment 139: Exact One-Warp I/O for 16-Bit 4096
+
+Hypothesis: once default fp16/bf16 dim 4096 uses one warp per row, the remaining boundary-checked vector I/O work is unnecessary for the exact 4096 case. Exact half/bfloat16 one-warp load/store helpers can remove the guards and zero-fill path while preserving the same float-intermediate arithmetic and final dtype conversion.
+
+Change:
+- Added exact fp16 one-warp load/store helpers matching the existing exact bf16 one-warp I/O pattern.
+- Extended the one-warp kernel and launch wrapper with a separate exact-half-I/O template flag.
+- Routed only default fp16/bf16 dim 4096 through exact one-warp I/O. The `fast_low_precision=True` native half2/bfloat162 routes remain gated, and non-4096 default routes stay on the generic one-warp I/O path.
+
+Result:
+- Targeted artifact: `benchmark_results/exp139_16bit_4096_one_warp_exact_io_h200_20260528.json`.
+- Targeted fp16 dim 4096 improved to 170.768 us versus 174.016 us in the accepted Exp138 repeat2 artifact.
+- Targeted bf16 dim 4096 improved to 171.040 us versus 173.200 us in the accepted Exp138 repeat2 artifact.
+- Full artifacts:
+  - `benchmark_results/current_default_precision_exp139_exact_4096_io_full_h200_20260528.json`: 115.261 us geometric mean, 1.315150x over baseline.
+  - `benchmark_results/current_default_precision_exp139_exact_4096_io_full_h200_20260528_repeat2.json`: 114.939 us geometric mean, 1.318843x over baseline.
+- Bootstrap comparison artifacts:
+  - `benchmark_results/compare_exp139_vs_baseline_bootstrap_h200_20260528.json`: bootstrap median 1.315060x, p05/p95 1.314290x/1.315767x.
+  - `benchmark_results/compare_exp139_vs_exp138_repeat2_bootstrap_h200_20260528.json`: 0.999314x versus Exp138 repeat2, bootstrap p05/p95 0.998642x/1.000126x.
+  - `benchmark_results/compare_exp139_repeat2_vs_baseline_bootstrap_h200_20260528.json`: bootstrap median 1.318786x, p05/p95 1.318131x/1.319420x.
+  - `benchmark_results/compare_exp139_repeat2_vs_exp138_repeat2_bootstrap_h200_20260528.json`: 1.002120x versus Exp138 repeat2, bootstrap p05/p95 1.001536x/1.002924x.
+- Repeat2 dtype speedups versus the original baseline: fp16 1.437042x, bf16 1.422245x, fp32 1.122368x.
+- Precision note: the accepted path keeps float intermediates and standard fp16/bf16 output conversion. It removes exact-dimension I/O overhead only; it does not use native half2/bfloat162 arithmetic in the default path.
+- Decision: accept. This is a small repeatable improvement over Exp138, raising the best default precision-preserving repeat from 1.316053x to 1.318843x over baseline. The requested 1.5x default target remains unmet; from the repeat2 value, another roughly 13.74% speedup from here is still required.
