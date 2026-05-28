@@ -1802,3 +1802,17 @@ Result:
 - The bf16 dim 8192 cell improved repeatably to about 233.5 us versus about 235.3 us in the accepted Exp126 artifacts.
 - The full sweeps did not beat the accepted Exp126 full artifacts, likely because the isolated 0.8% cell win is below run-to-run movement across the full 24-case suite.
 - Decision: reject for now and keep the accepted Exp126 source. Revisit only with a tighter paired protocol for single-cell changes.
+
+## Experiment 128: bf16 8192 Vectorized Boundary I/O Retest
+
+Hypothesis: bf16 dim 8192 currently stays on generic scalar boundary conversion, while bf16 dims 4096 and 16384 use vectorized bfloat162 conversion. Retesting vectorized conversion for only bf16 dim 8192 under the current grid-constant codegen may capture a boundary-packing win without changing float-intermediate arithmetic.
+
+Change:
+- Temporarily routed bf16 dim 8192 through `FloatIntermediateIO<..., at::BFloat16>` by excluding `N == 8192` from the generic bf16 I/O path.
+- Kept all Hadamard arithmetic in float and output conversion unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp128_bf16_8192_vector_io_current_h200_20260528.json`.
+- bf16 dim 8192 regressed to 236.768 us versus 235.360 us in the accepted Exp126 repeat artifact.
+- fp16/fp32 guardrails were normal.
+- Decision: reject and keep bf16 dim 8192 on the generic scalar boundary-conversion path.
