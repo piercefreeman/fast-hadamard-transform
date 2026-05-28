@@ -1679,3 +1679,16 @@ Result:
 - fp32 dim 8192 regressed to 159.872 us and fp32 dim 16384 regressed to 161.824 us.
 - fp16/bf16 guardrails were normal.
 - Decision: reject and keep the accepted fp32 launch widths.
+
+## Experiment 120: Preferred-L1 Carveout for Large 16-Bit Defaults
+
+Hypothesis: the max-shared carveout was rejected, but the opposite preference may help if default fp16/bf16 large kernels are sensitive to global input/output cache behavior. Preferring L1 is a launch attribute only and does not change arithmetic.
+
+Change:
+- Temporarily set `cudaFuncAttributePreferredSharedMemoryCarveout` to `cudaSharedmemCarveoutMaxL1` for default fp16/bf16 dims 4096, 8192, and 16384.
+
+Result:
+- Artifact: `benchmark_results/exp120_16bit_large_prefer_l1_carveout_h200_20260528.json`.
+- The L1 preference badly regressed the shared-memory exchange path: fp16 dim 4096 measured 513.424 us, fp16 dim 8192 402.688 us, and bf16 dim 16384 380.048 us.
+- fp32 guardrails were normal because they did not use the experimental route.
+- Decision: reject and leave the launch carveout unset.
