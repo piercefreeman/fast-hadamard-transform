@@ -1498,3 +1498,16 @@ Result:
 - fp16 dim 32768 regressed to 311.808 us versus the accepted roughly 306-307 us range.
 - bf16 and fp32 guardrails were normal.
 - Decision: reject and restore the normal exact fp16 load.
+
+## Experiment 107: bf16 32768 Restrict Route Shared-Memory Carveout
+
+Hypothesis: the specialized bf16 dim 32768 route uses a 128 KiB exchange buffer, so preferring maximum shared-memory carveout may help this kernel even though the earlier broad carveout experiment regressed.
+
+Change:
+- Temporarily set `cudaFuncAttributePreferredSharedMemoryCarveout` to `cudaSharedmemCarveoutMaxShared` only for the specialized bf16 dim 32768 restrict kernel.
+
+Result:
+- Artifact: `benchmark_results/exp107_bf16_32768_restrict_carveout_h200_20260528.json`.
+- bf16 dim 32768 regressed to 346.336 us versus the accepted 326 us range.
+- fp16 and fp32 guardrails were normal because they do not use this launch path.
+- Decision: reject and keep only the dynamic shared-memory size attribute.
