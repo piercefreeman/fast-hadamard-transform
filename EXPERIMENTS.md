@@ -1785,3 +1785,20 @@ Result:
 - Repeat-2 candidate timings: fp16 dim 8192 231.264 us, bf16 dim 16384 233.568 us, fp32 dim 32768 194.560 us.
 - Correctness/unit verification after final build: `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py`, 55 passed.
 - Decision: accept. This is precision-preserving because it changes only kernel parameter placement/codegen and keeps float-intermediate arithmetic and output dtype conversion unchanged.
+
+## Experiment 127: bf16 8192 Grid-Constant Params
+
+Hypothesis: the broad grid-constant experiment also showed a possible bf16 dim 8192 win. Adding that one route on top of Experiment 126 may improve another weak large bf16 cell without changing arithmetic precision.
+
+Change:
+- Temporarily routed default bf16 dim 8192 through the grid-constant main-kernel wrapper.
+- Kept the accepted Experiment 126 routes unchanged.
+
+Result:
+- Targeted artifact: `benchmark_results/exp127_bf16_8192_grid_constant_h200_20260528.json`.
+- Full artifacts:
+  - `benchmark_results/current_default_precision_exp127_bf16_8192_grid_constant_full_h200_20260528.json`: 1.2859x over baseline.
+  - `benchmark_results/current_default_precision_exp127_bf16_8192_grid_constant_full_h200_20260528_repeat2.json`: 1.2850x over baseline.
+- The bf16 dim 8192 cell improved repeatably to about 233.5 us versus about 235.3 us in the accepted Exp126 artifacts.
+- The full sweeps did not beat the accepted Exp126 full artifacts, likely because the isolated 0.8% cell win is below run-to-run movement across the full 24-case suite.
+- Decision: reject for now and keep the accepted Exp126 source. Revisit only with a tighter paired protocol for single-cell changes.
