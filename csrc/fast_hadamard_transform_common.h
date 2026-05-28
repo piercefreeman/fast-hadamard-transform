@@ -215,7 +215,8 @@ inline __device__ void store_output_warp(output_t *out, float out_vals[kNChunks]
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Pre=true means the exchange before the hadamard_mult_warp, Pre=false means after.
-template <int kNChunks, int kChunksPerExchange, int kNElts, int kWarpSize, int kNWarps, bool Pre, typename vec_t>
+template <int kNChunks, int kChunksPerExchange, int kNElts, int kWarpSize, int kNWarps,
+          bool Pre, bool kSkipInitialPreSync, typename vec_t>
 inline __device__ void exchange_smem_pre(float x_vals[kNChunks][kNElts], vec_t *smem) {
     constexpr int kNThreads = kWarpSize * kNWarps;
     constexpr int kNExchangePerVec = kNElts / (sizeof(vec_t) / sizeof(float));
@@ -226,7 +227,7 @@ inline __device__ void exchange_smem_pre(float x_vals[kNChunks][kNElts], vec_t *
     // We use the XOR swizzle trick (new_col = col ^ row) to avoid / reduce smem bank conflicts.
     #pragma unroll
     for (int c0 = 0; c0 < kNChunks / kChunksPerExchange; ++c0) {
-        __syncthreads();
+        if constexpr (!Pre || !kSkipInitialPreSync || kNChunks != kChunksPerExchange) { __syncthreads(); }
         #pragma unroll
         for (int c1 = 0; c1 < kChunksPerExchange; ++c1) {
             #pragma unroll

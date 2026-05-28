@@ -199,6 +199,8 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
     static_assert(kChunksPerExchange * sizeof(vec_t) * kNExchangePerVec * kNThreads == Ktraits::kSmemExchangeSize);
     constexpr int kNExchanges = kNChunks / kChunksPerExchange;
     static_assert(kNExchanges * kChunksPerExchange == kNChunks);
+    constexpr bool kSkipInitialPreSync =
+        kNElts == 8 && !(std::is_same_v<input_t, at::BFloat16> && Ktraits::N == 32 * 1024);
 
     vec_t *smem_exchange = reinterpret_cast<vec_t *>(smem_);
 
@@ -217,13 +219,15 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
     }
 
     if constexpr (kNWarps > 1) {
-        exchange_smem_pre<kNChunks, kChunksPerExchange, kNElts, kWarpSize, kNWarps, true, vec_t>(x_vals, smem_exchange);
+        exchange_smem_pre<kNChunks, kChunksPerExchange, kNElts, kWarpSize, kNWarps,
+                           true, kSkipInitialPreSync, vec_t>(x_vals, smem_exchange);
         if constexpr (kUseConditionalWarp) {
             hadamard_mult_warp_conditional<kLogNWarps, 0, kNChunks, kNElts>(x_vals);
         } else {
             hadamard_mult_warp<kLogNWarps, 0, kNChunks, kNElts>(x_vals);
         }
-        exchange_smem_pre<kNChunks, kChunksPerExchange, kNElts, kWarpSize, kNWarps, false, vec_t>(x_vals, smem_exchange);
+        exchange_smem_pre<kNChunks, kChunksPerExchange, kNElts, kWarpSize, kNWarps,
+                           false, kSkipInitialPreSync, vec_t>(x_vals, smem_exchange);
     }
 
     if constexpr (kNChunks > 1) {

@@ -751,3 +751,121 @@ Result:
 - Artifact: `benchmark_results/exp048_default_large_16elts_float_exchange_h200_20260528.json`.
 - Regressed every targeted fp16/bf16 case. Examples: fp16 dim 4096 moved to 313.136 us and bf16 dim 32768 moved to 434.912 us.
 - Decision: reject and restore `kNElts = 8` for the default 16-bit float-intermediate kernel.
+
+## Experiment 049: Native Load/Store Boundary for Large Defaults
+
+Hypothesis: keeping native fp16/bf16 vectors only at the global-memory boundary could reduce load/store overhead while retaining float intermediates for the transform math.
+
+Change:
+- Temporarily used native input/output vector types around the large default float-intermediate kernels.
+
+Result:
+- Artifact: `benchmark_results/exp049_native_load_store_default_large_h200_20260528.json`.
+- Large fp16/bf16 cases were neutral to slower; fp16 dim 32768 regressed to 353.280 us and bf16 dim 32768 to 358.320 us.
+- fp32 guard cases stayed near the existing route.
+- Decision: reject. Boundary vectorization did not buy enough to offset codegen and conversion cost.
+
+## Experiment 050: 32-Byte Float Exchange Vectors
+
+Hypothesis: wider shared-memory exchange vectors might reduce transaction overhead in the float-intermediate default kernels.
+
+Change:
+- Temporarily widened the exchange vector shape for large default float-intermediate kernels.
+
+Result:
+- Artifact: `benchmark_results/exp050_float_exchange_32b_vec_default_large_h200_20260528.json`.
+- Severe regressions across the targeted 16-bit cases: fp16 dim 4096 moved to 294.352 us and bf16 dim 32768 to 398.144 us.
+- Decision: reject and keep the prior exchange vector shape.
+
+## Experiment 051: Broad Initial Pre-Exchange Sync Skip
+
+Hypothesis: the first shared-memory barrier in a one-round pre-exchange is redundant because the buffer has not been read by the current exchange sequence yet.
+
+Change:
+- Temporarily skipped the initial pre-exchange `__syncthreads()` for all one-round exchanges.
+
+Result:
+- Artifact: `benchmark_results/exp051_skip_initial_pre_exchange_sync_h200_20260528.json`.
+- Large 16-bit cases improved, including fp16 dim 32768 at 313.200 us.
+- fp32 dim 16384 regressed badly to 181.216 us.
+- Decision: reject the broad route. The sync skip must be narrowed away from the affected fp32 path.
+
+## Experiment 052: 16-Bit Initial Pre-Exchange Sync Skip
+
+Hypothesis: the same one-round pre-exchange barrier skip can be limited to the 16-bit float-intermediate shape, avoiding the fp32 regression while preserving math precision.
+
+Change:
+- Skipped the initial pre-exchange barrier only for kernels with `kNElts == 8`.
+
+Result:
+- Artifact: `benchmark_results/exp052_skip_initial_pre_exchange_sync_16bit_only_h200_20260528.json`.
+- fp32 returned to the expected range.
+- fp16 large cases improved, but bf16 dim 32768 moved to 345.008 us, behind the accepted selective 32768 route.
+- Decision: reject this still-broad 16-bit route and narrow the exception further.
+
+## Experiment 053: Selective Initial Pre-Exchange Sync Skip
+
+Hypothesis: skipping the initial pre-exchange barrier is useful for the one-round 16-bit float-intermediate kernels except the bf16 dim 32768 route, where prior measurements showed a small regression.
+
+Change:
+- Added a compile-time `kSkipInitialPreSync` parameter to `exchange_smem_pre`.
+- Enabled the skip only for `kNElts == 8`, excluding bf16 dim 32768.
+- Kept post-exchange barriers and multi-round exchange barriers intact.
+
+Result:
+- Artifact: `benchmark_results/exp053_selective_initial_pre_sync_skip_h200_20260528.json`.
+- Targeted large-case results: fp16 4096 234.512 us, 8192 235.456 us, 16384 245.952 us, 32768 312.624 us; bf16 4096 233.440 us, 8192 235.680 us, 16384 248.720 us, 32768 341.840 us.
+- fp32 guard cases stayed near the expected range.
+- Decision: accept. This is precision-preserving because it changes synchronization only, not arithmetic dtype.
+
+## Experiment 054: Explicit 8-Element Thread Hadamard
+
+Hypothesis: spelling out the 8-element per-thread Hadamard butterfly may help the compiler reduce loop overhead in the large float-intermediate path.
+
+Change:
+- Temporarily replaced the generic 8-element thread helper with an explicit unrolled implementation.
+
+Result:
+- Artifact: `benchmark_results/exp054_explicit_thread8_full_h200_20260528.json`.
+- Full-sweep geometric mean was 121.371 us, or 1.249x over baseline, behind the best Experiment 047 repeat.
+- Decision: reject. The explicit helper did not improve the full suite.
+
+## Experiment 055: Runtime Exact-Dimension Load/Store Fast Path
+
+Hypothesis: rows whose dimension exactly matches the transform length can skip dynamic boundary checks in load/store.
+
+Change:
+- Temporarily added a runtime exact-dimension fast path for load/store.
+
+Result:
+- Artifact: `benchmark_results/exp055_full_dim_load_store_fastpath_h200_20260528.json`.
+- Full-sweep geometric mean was 121.643 us, or 1.246x over baseline.
+- bf16 dim 32768 improved to 328.832 us, but many other cases regressed, including fp32 dim 8192 and 16384.
+- Decision: reject. The runtime branch and codegen cost outweighed the isolated bf16 win.
+
+## Experiment 056: Compile-Time Exact-Dimension bf16 32768 Fast Path
+
+Hypothesis: specializing only the observed bf16 dim 32768 exact-dimension win avoids the broader runtime-path regressions.
+
+Change:
+- Temporarily routed only bf16 dim 32768 through a compile-time exact-dimension load/store specialization.
+
+Result:
+- Artifact: `benchmark_results/exp056_selective_full_dim_bf16_32768_h200_20260528.json`.
+- bf16 dim 32768 regressed to 359.040 us.
+- Decision: reject and keep the Experiment 053 sync-only change.
+
+## Current Default Precision State After Experiment 057
+
+Result:
+- Full default precision-preserving artifacts:
+  - `benchmark_results/current_default_precision_exp057_sync_skip_full_h200_20260528.json`: 121.522 us geometric mean, 1.247x over baseline.
+  - `benchmark_results/current_default_precision_exp057_sync_skip_full_h200_20260528_repeat2.json`: 121.371 us geometric mean, 1.249x over baseline.
+- Dtype geometric-mean speedups in the repeat artifact: fp16 1.346x, bf16 1.311x, fp32 1.104x.
+- Correctness/unit verification: `uv run pytest -q tests/test_fast_hadamard_transform.py`, 55 passed.
+- Default-path precision spot check versus fp32 reference over dims 4096 through 32768:
+  - fp16 max abs: 0.000976 to 0.001750.
+  - bf16 max abs: 0.007806 to 0.015549.
+  - fp32 max abs: 0.000000775 to 0.000004053.
+- Decision: keep the selective sync skip. It does not change arithmetic precision, and native `half2`/`bfloat162` arithmetic remains behind `fast_low_precision=True`.
+- The default precision-preserving path still does not meet the requested 50% aggregate speedup. The opt-in fast low-precision path remains the only measured route near 1.5x, at about 1.496x in the latest full repeat.
