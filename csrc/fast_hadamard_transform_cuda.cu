@@ -433,7 +433,80 @@ struct FloatIntermediateWarpIO<kNChunks, 8, at::BFloat16> {
     }
 };
 
-template<typename Ktraits, bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false>
+template<int kNChunks>
+inline __device__ void load_input_half_exact(at::Half *x, float x_vals[kNChunks][8]) {
+    using vec_t = typename BytesToType<sizeof(at::Half) * 8>::Type;
+    const __half *x_half = reinterpret_cast<const __half *>(x);
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        __half2 x_vals_load[4];
+        reinterpret_cast<vec_t *>(x_vals_load)[0] =
+            reinterpret_cast<const vec_t *>(x_half)[c * blockDim.x + threadIdx.x];
+        #pragma unroll
+        for (int p = 0; p < 4; ++p) {
+            const float2 vals = __half22float2(x_vals_load[p]);
+            x_vals[c][2 * p] = vals.x;
+            x_vals[c][2 * p + 1] = vals.y;
+        }
+    }
+}
+
+template<int kNChunks>
+inline __device__ void store_output_half_exact(at::Half *out, float out_vals[kNChunks][8], float scale) {
+    using vec_t = typename BytesToType<sizeof(at::Half) * 8>::Type;
+    __half *out_half = reinterpret_cast<__half *>(out);
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        __half2 out_vals_store[4];
+        #pragma unroll
+        for (int p = 0; p < 4; ++p) {
+            out_vals_store[p] = __float22half2_rn(make_float2(
+                out_vals[c][2 * p] * scale, out_vals[c][2 * p + 1] * scale));
+        }
+        reinterpret_cast<vec_t *>(out_half)[c * blockDim.x + threadIdx.x] =
+            reinterpret_cast<const vec_t *>(out_vals_store)[0];
+    }
+}
+
+template<int kNChunks>
+inline __device__ void load_input_bfloat16_warp_exact(
+    at::BFloat16 *x, float x_vals[kNChunks][8], int lane_id) {
+    using vec_t = typename BytesToType<sizeof(at::BFloat16) * 8>::Type;
+    const __nv_bfloat16 *x_bfloat = reinterpret_cast<const __nv_bfloat16 *>(x);
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        __nv_bfloat162 x_vals_load[4];
+        reinterpret_cast<vec_t *>(x_vals_load)[0] =
+            reinterpret_cast<const vec_t *>(x_bfloat)[c * 32 + lane_id];
+        #pragma unroll
+        for (int p = 0; p < 4; ++p) {
+            const float2 vals = __bfloat1622float2(x_vals_load[p]);
+            x_vals[c][2 * p] = vals.x;
+            x_vals[c][2 * p + 1] = vals.y;
+        }
+    }
+}
+
+template<int kNChunks>
+inline __device__ void store_output_bfloat16_warp_exact(
+    at::BFloat16 *out, float out_vals[kNChunks][8], int lane_id, float scale) {
+    using vec_t = typename BytesToType<sizeof(at::BFloat16) * 8>::Type;
+    __nv_bfloat16 *out_bfloat = reinterpret_cast<__nv_bfloat16 *>(out);
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        __nv_bfloat162 out_vals_store[4];
+        #pragma unroll
+        for (int p = 0; p < 4; ++p) {
+            out_vals_store[p] = __float22bfloat162_rn(make_float2(
+                out_vals[c][2 * p] * scale, out_vals[c][2 * p + 1] * scale));
+        }
+        reinterpret_cast<vec_t *>(out_bfloat)[c * 32 + lane_id] =
+            reinterpret_cast<const vec_t *>(out_vals_store)[0];
+    }
+}
+
+template<typename Ktraits, bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false,
+         bool kUseExactHalfIO = false>
 __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardParamsBase params, char *smem_) {
     constexpr int kNThreads = Ktraits::kNThreads;
     constexpr int kNElts = Ktraits::kNElts;
@@ -471,11 +544,14 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
     input_t *out = reinterpret_cast<input_t *>(params.out_ptr) + batch_id * params.out_batch_stride;
 
     float x_vals[kNChunks][kNElts];
+    constexpr bool kUseHalfExactIO = kUseExactHalfIO && std::is_same_v<input_t, at::Half> && kNElts == 8;
     constexpr bool kUseGenericIO =
         (std::is_same_v<input_t, float> && Ktraits::N == 32 * 1024) ||
         (std::is_same_v<input_t, at::BFloat16> && kNElts == 8 &&
          Ktraits::N != 4 * 1024 && Ktraits::N != 16 * 1024);
-    if constexpr (kUseGenericIO) {
+    if constexpr (kUseHalfExactIO) {
+        load_input_half_exact<kNChunks>(x, x_vals);
+    } else if constexpr (kUseGenericIO) {
         load_input<kNChunks, kNElts, input_t>(x, x_vals, params.dim);
     } else {
         FloatIntermediateIO<kNChunks, kNElts, input_t>::load(x, x_vals, params.dim);
@@ -527,18 +603,22 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
         }
     }
 
-    if constexpr (kUseGenericIO) {
+    if constexpr (kUseHalfExactIO) {
+        store_output_half_exact<kNChunks>(out, x_vals, params.scale);
+    } else if constexpr (kUseGenericIO) {
         store_output<kNChunks, kNElts, input_t>(out, x_vals, params.dim, params.scale);
     } else {
         FloatIntermediateIO<kNChunks, kNElts, input_t>::store(out, x_vals, params.dim, params.scale);
     }
 }
 
-template<typename Ktraits, bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false>
+template<typename Ktraits, bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false,
+         bool kUseExactHalfIO = false>
 __global__ __launch_bounds__(Ktraits::kNThreads)
 void fast_hadamard_transform_kernel(HadamardParamsBase params) {
     extern __shared__ char smem_[];
-    fast_hadamard_transform_kernel_body<Ktraits, kUseConditionalWarp, kUseDoubleBufferExchange>(params, smem_);
+    fast_hadamard_transform_kernel_body<Ktraits, kUseConditionalWarp, kUseDoubleBufferExchange, kUseExactHalfIO>(
+        params, smem_);
 }
 
 template<typename Ktraits>
@@ -1160,7 +1240,7 @@ void fast_hadamard_transform_bfloat162_one_warp_launch(HadamardParamsBase &param
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-template<typename Ktraits, int kRowsPerBlock>
+template<typename Ktraits, int kRowsPerBlock, bool kUseExactBFloat16IO = false>
 __global__ __launch_bounds__(32 * kRowsPerBlock)
 void fast_hadamard_transform_one_warp_kernel(HadamardParamsBase params) {
     static_assert(Ktraits::kNThreads == 32);
@@ -1180,7 +1260,11 @@ void fast_hadamard_transform_one_warp_kernel(HadamardParamsBase params) {
     input_t *out = reinterpret_cast<input_t *>(params.out_ptr) + batch_id * params.out_batch_stride;
 
     float x_vals[kNChunks][kNElts];
-    FloatIntermediateWarpIO<kNChunks, kNElts, input_t>::load(x, x_vals, params.dim, lane_id);
+    if constexpr (kUseExactBFloat16IO && std::is_same_v<input_t, at::BFloat16> && kNElts == 8) {
+        load_input_bfloat16_warp_exact<kNChunks>(x, x_vals, lane_id);
+    } else {
+        FloatIntermediateWarpIO<kNChunks, kNElts, input_t>::load(x, x_vals, params.dim, lane_id);
+    }
 
     hadamard_mult_thread<kLogNElts, kNChunks>(x_vals);
     hadamard_mult_warp<5, 0, kNChunks, kNElts>(x_vals);
@@ -1202,16 +1286,20 @@ void fast_hadamard_transform_one_warp_kernel(HadamardParamsBase params) {
         }
     }
 
-    FloatIntermediateWarpIO<kNChunks, kNElts, input_t>::store(out, x_vals, params.dim, lane_id, params.scale);
+    if constexpr (kUseExactBFloat16IO && std::is_same_v<input_t, at::BFloat16> && kNElts == 8) {
+        store_output_bfloat16_warp_exact<kNChunks>(out, x_vals, lane_id, params.scale);
+    } else {
+        FloatIntermediateWarpIO<kNChunks, kNElts, input_t>::store(out, x_vals, params.dim, lane_id, params.scale);
+    }
 }
 
 template<int kNThreads, int kLogN, typename input_t,
-         bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false>
+         bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false, bool kUseExactHalfIO = false>
 void fast_hadamard_transform_launch(HadamardParamsBase &params, cudaStream_t stream) {
     using Ktraits = fast_hadamard_transform_kernel_traits<kNThreads, kLogN, input_t>;
     constexpr int kSmemSize = Ktraits::kSmemSize * (kUseDoubleBufferExchange ? 2 : 1);
     dim3 grid(params.batch);
-    auto kernel = &fast_hadamard_transform_kernel<Ktraits, kUseConditionalWarp, kUseDoubleBufferExchange>;
+    auto kernel = &fast_hadamard_transform_kernel<Ktraits, kUseConditionalWarp, kUseDoubleBufferExchange, kUseExactHalfIO>;
     if (kSmemSize >= 48 * 1024) {
         C10_CUDA_CHECK(cudaFuncSetAttribute(
             kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
@@ -1234,11 +1322,12 @@ void fast_hadamard_transform_lowp_exchange_launch(HadamardParamsBase &params, cu
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-template<int kRowsPerBlock, int kLogN, typename input_t>
+template<int kRowsPerBlock, int kLogN, typename input_t, bool kUseExactBFloat16IO = false>
 void fast_hadamard_transform_one_warp_launch(HadamardParamsBase &params, cudaStream_t stream) {
     using Ktraits = fast_hadamard_transform_kernel_traits<32, kLogN, input_t>;
     dim3 grid((params.batch + kRowsPerBlock - 1) / kRowsPerBlock);
-    fast_hadamard_transform_one_warp_kernel<Ktraits, kRowsPerBlock><<<grid, 32 * kRowsPerBlock, 0, stream>>>(params);
+    fast_hadamard_transform_one_warp_kernel<Ktraits, kRowsPerBlock, kUseExactBFloat16IO>
+        <<<grid, 32 * kRowsPerBlock, 0, stream>>>(params);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1316,6 +1405,8 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
         } else if constexpr (std::is_same_v<input_t, at::BFloat16>) {
             if (params.fast_low_precision) {
                 fast_hadamard_transform_bfloat162_one_warp_launch<8, 11>(params, stream);
+            } else if (params.dim == 2048) {
+                fast_hadamard_transform_one_warp_launch<8, 11, input_t, true>(params, stream);
             } else {
                 fast_hadamard_transform_one_warp_launch<8, 11, input_t>(params, stream);
             }
@@ -1382,6 +1473,8 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
         } else if constexpr (std::is_same_v<input_t, at::Half>) {
             if (params.fast_low_precision) {
                 fast_hadamard_transform_half2_launch<512, 15>(params, stream);
+            } else if (params.dim == 32 * 1024) {
+                fast_hadamard_transform_launch<1024, 15, input_t, false, false, true>(params, stream);
             } else {
                 fast_hadamard_transform_launch<1024, 15, input_t>(params, stream);
             }

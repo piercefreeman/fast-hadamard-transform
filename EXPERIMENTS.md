@@ -1094,3 +1094,65 @@ Result:
 - Correctness/unit verification after final rebuild: `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py`, 55 passed.
 - Decision: keep the 4096-only double-buffered exchange. It is synchronization-only and does not change arithmetic precision.
 - The default precision-preserving path remains far short of the requested 50% aggregate speedup.
+
+## Experiment 077: Retest 512-Thread Default Launches for 8192 and 16384
+
+Hypothesis: the earlier 512-thread default launch rejection predates vectorized float-intermediate I/O, so dims 8192 and 16384 may now benefit from fewer chunks per thread.
+
+Change:
+- Temporarily routed default fp16/bf16 dims 8192 and 16384 through 512-thread launches.
+
+Result:
+- Artifact: `benchmark_results/exp077_default_8192_16384_512_threads_h200_20260528.json`.
+- fp16 dim 8192 regressed to 254.720 us and fp16 dim 16384 to 261.056 us.
+- bf16 dim 8192 regressed to 256.672 us and bf16 dim 16384 to 259.872 us.
+- Decision: reject and restore the 256-thread launches.
+
+## Experiment 078: fp16 32768 Exact I/O
+
+Hypothesis: the dim 32768 default fp16 route always has `params.dim == Ktraits::N` in the benchmarked power-of-two case, so a guarded exact-I/O variant can remove boundary checks and zero initialization while preserving float arithmetic. Padded non-power inputs must stay on the guarded route.
+
+Change:
+- Added exact fp16 main-kernel load/store helpers.
+- Routed default fp16 dim 32768 through the exact helpers only when `params.dim == 32768`.
+
+Result:
+- Artifact: `benchmark_results/exp078_fp16_32768_exact_io_h200_20260528.json`.
+- fp16 dim 32768 improved to 307.024 us; bf16 dim 32768 remained on the guarded route at 343.056 us.
+- Correctness max-abs versus fp32 reference matched the float-intermediate default range.
+- Decision: accept.
+
+## Experiment 079: Full Sweep With fp16 32768 Exact I/O
+
+Result:
+- Full artifact: `benchmark_results/current_default_precision_exp079_fp16_32768_exact_io_full_h200_20260528.json`.
+- Full default precision-preserving geometric mean: 118.505 us, 1.279x over baseline.
+- Decision: keep evaluating exact-I/O opportunities, but only with exact-dimension runtime guards.
+
+## Experiment 080: bf16 2048 Exact One-Warp I/O
+
+Hypothesis: bf16 dim 2048 showed an exact-I/O win in the earlier broad exact-dim test. A one-warp exact helper guarded by `params.dim == 2048` may capture that win without affecting padded inputs.
+
+Change:
+- Added exact bf16 one-warp load/store helpers.
+- Routed default bf16 dim 2048 through them only when `params.dim == 2048`.
+
+Result:
+- Artifact: `benchmark_results/exp080_bf16_2048_and_fp16_32768_exact_io_h200_20260528.json`.
+- bf16 dim 2048 improved to 136.080 us in the targeted run.
+- fp16 dim 32768 stayed improved at 306.560 us.
+- Decision: accept pending full-sweep repeat.
+
+## Current Default Precision State After Experiment 081
+
+Result:
+- Full default precision-preserving artifacts:
+  - `benchmark_results/current_default_precision_exp081_exact_io_selective_full_h200_20260528.json`: 118.538 us geometric mean, 1.279x over baseline.
+  - `benchmark_results/current_default_precision_exp081_exact_io_selective_full_h200_20260528_repeat2.json`: 118.483 us geometric mean, 1.279x over baseline.
+- Correctness/unit verification after final rebuild: `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py`, 55 passed.
+- Targeted precision spot check versus fp32 reference:
+  - fp16 dim 2048 max abs 0.001915 and dim 32768 max abs 0.001814.
+  - bf16 dim 2048 max abs 0.009661 and dim 32768 max abs 0.015195.
+  - fp32 dim 2048 max abs 0.000000715 and dim 32768 max abs 0.000003099.
+- Decision: keep the exact-I/O routes for fp16 dim 32768 and bf16 dim 2048. They remove boundary work only for exact power-of-two dimensions and preserve the same float-intermediate arithmetic.
+- The default precision-preserving path remains about 27.9% faster than baseline, still well short of the requested 50% aggregate target.
