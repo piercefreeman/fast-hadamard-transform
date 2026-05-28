@@ -1692,3 +1692,17 @@ Result:
 - The L1 preference badly regressed the shared-memory exchange path: fp16 dim 4096 measured 513.424 us, fp16 dim 8192 402.688 us, and bf16 dim 16384 380.048 us.
 - fp32 guardrails were normal because they did not use the experimental route.
 - Decision: reject and leave the launch carveout unset.
+
+## Experiment 121: 4096 Two-Min-Block Launch Bounds
+
+Hypothesis: default fp16/bf16 dim 4096 uses only 32 KiB of dynamic shared memory after double-buffering, so `__launch_bounds__(threads, 2)` may improve resident-block scheduling or register allocation without the larger-dimension occupancy penalty.
+
+Change:
+- Temporarily added a `__launch_bounds__(Ktraits::kNThreads, 2)` main-kernel wrapper.
+- Routed only default fp16/bf16 dim 4096 through it, preserving the accepted double-buffered exchange.
+
+Result:
+- Artifact: `benchmark_results/exp121_16bit_4096_min_blocks2_h200_20260528.json`.
+- fp16 dim 4096 regressed to 233.440 us and bf16 dim 4096 regressed to 233.728 us.
+- Adjacent dims and fp32 guardrails were normal.
+- Decision: reject and keep the standard launch bounds for dim 4096.
