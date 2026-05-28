@@ -2035,3 +2035,26 @@ Result:
 - Guardrail cells were neutral-to-normal: bf16 dim 8192 235.904 us, bf16 dim 16384 233.872 us, fp32 dim 8192 142.416 us, and fp32 dim 16384 149.296 us.
 - Precision note: this experiment would have preserved float intermediates and the standard fp16 output conversion. It only changed exact-dimension I/O specialization, but the codegen/timing result was slower.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
+
+## Experiment 142: 1024-Thread 16-Bit 8192/16384 Retest
+
+Hypothesis: default fp16/bf16 dims 8192 and 16384 may be limited by per-thread register and instruction work. Routing only exact 8192 and 16384 16-bit cases through 1024-thread float-intermediate kernels could reduce per-thread chunks while preserving the same arithmetic and output conversion.
+
+Change:
+- Temporarily routed exact default fp16 dim 8192 through the grid-constant 1024-thread main kernel.
+- Temporarily routed exact default bf16 dim 8192 through the 1024-thread main kernel.
+- Temporarily routed exact default fp16 dim 16384 through the 1024-thread main kernel.
+- Temporarily routed the accepted exact-power bf16 dim 16384 pre-scale path through the 1024-thread grid-constant main kernel.
+- Left fp32 and `fast_low_precision=True` native half2/bfloat162 routes unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp142_16bit_8192_16384_1024_threads_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- ptxas showed the intended lower register pressure for the new fp16 kernels, including 32 registers for fp16 dim 8192 and 46 registers for fp16 dim 16384, with no spills.
+- The lower register pressure did not translate to speed: fp16 dim 8192 regressed to 271.840 us versus 231.328 us in the accepted Exp139 repeat2 artifact.
+- fp16 dim 16384 regressed to 333.936 us versus 245.792 us.
+- bf16 dim 8192 regressed to 270.880 us versus 235.840 us.
+- bf16 dim 16384 regressed to 277.760 us versus 233.840 us.
+- fp32 guardrails were normal: fp32 dim 8192 142.768 us and fp32 dim 16384 149.744 us.
+- Precision note: this experiment preserved float intermediates and standard fp16/bf16 output conversion; it only changed launch shape for exact dimensions.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
