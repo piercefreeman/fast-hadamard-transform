@@ -1624,3 +1624,16 @@ Result:
 - bf16 dim 16384 regressed to 246.208 us, losing the accepted pre-scale win.
 - fp16 and fp32 guardrails were normal because they do not use this route.
 - Decision: reject and keep the non-conditional pre-scale route.
+
+## Experiment 116: 8192 Double-Buffered Exchange Retest
+
+Hypothesis: after later vectorized I/O and pre-scale changes, default fp16/bf16 dim 8192 may respond differently to double-buffered post-exchange than it did in Experiment 071.
+
+Change:
+- Temporarily routed only default fp16/bf16 dim 8192 through the double-buffered post-exchange variant.
+
+Result:
+- Artifact: `benchmark_results/exp116_16bit_8192_double_buffer_retest_h200_20260528.json`.
+- fp16 dim 8192 regressed to 242.640 us and bf16 dim 8192 regressed to 237.952 us.
+- Neighboring dims and fp32 guardrails were normal.
+- Decision: reject and keep dim 8192 on the accepted single-buffer route.
