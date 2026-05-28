@@ -1253,3 +1253,60 @@ Result:
 - Geometric mean over the 18 common targeted cases was 0.9996x versus the accepted Experiment 081 route.
 - Isolated small wins, such as fp32 dim 8192 at 140.576 us, did not offset regressions like bf16 dim 2048 at 135.984 us and fp32 dim 16384 at 148.608 us.
 - Decision: reject and restore the transpose-based chunk stage.
+
+## Experiment 089: bf16 32768 Vectorized Load Only
+
+Hypothesis: broad vectorized bf16 main-kernel I/O regressed dim 32768, but the load side and store side may have different codegen effects. Using vectorized bfloat162 load conversion while keeping the generic scalar store may isolate a useful half of the change.
+
+Change:
+- Temporarily routed default bf16 dim 32768 through `FloatIntermediateIO` vectorized load conversion only.
+- Kept all Hadamard arithmetic in float and kept the generic output path.
+
+Result:
+- Artifact: `benchmark_results/exp089_bf16_32768_vector_load_only_h200_20260528.json`.
+- bf16 dim 32768 regressed to 360.336 us. fp16 dim 32768 guardrail was neutral at 306.880 us.
+- Decision: reject and restore the generic bf16 load path.
+
+## Experiment 090: bf16 32768 Vectorized Store Only
+
+Hypothesis: vectorized bfloat162 output packing may still be useful if the bf16 dim 32768 regression is caused mainly by the vectorized load side.
+
+Change:
+- Temporarily routed default bf16 dim 32768 through `FloatIntermediateIO` vectorized store conversion only.
+- Kept the generic scalar input path and float Hadamard arithmetic.
+
+Result:
+- Artifact: `benchmark_results/exp090_bf16_32768_vector_store_only_h200_20260528.json`.
+- bf16 dim 32768 regressed to 349.568 us. fp16 dim 32768 guardrail was neutral at 306.656 us.
+- Decision: reject and keep the generic guarded bf16 dim 32768 I/O path.
+
+## Experiment 091: Restrict Row Pointers
+
+Hypothesis: the CUDA kernels always write into a freshly allocated output tensor, so row input and output pointers do not alias. Marking row pointers `__restrict__` may help ptxas schedule load/store-heavy float-intermediate kernels without changing arithmetic.
+
+Change:
+- Temporarily marked row-local input and output pointers as `__restrict__` across the kernel family.
+
+Result:
+- Artifacts:
+  - `benchmark_results/exp091_restrict_row_pointers_h200_20260528.json`.
+  - `benchmark_results/exp091_restrict_row_pointers_bf16_32768_repeat_h200_20260528.json`.
+- Global restrict was unusable: fp32 dim 4096 regressed to 150.432 us, fp32 dim 16384 to 171.312 us, and fp32 dim 32768 to 209.296 us.
+- The bf16 dim 32768 case improved repeatably, measuring 334.352 us and 333.824 us in targeted runs.
+- Decision: reject global restrict but isolate the bf16 dim 32768 signal in a dedicated route.
+
+## Experiment 092: Specialized bf16 32768 Restrict Route
+
+Hypothesis: the beneficial part of Experiment 091 is specific to the default bf16 dim 32768 kernel. A dedicated exact-dimension route can preserve the existing generic bf16 load/store and float arithmetic while applying `__restrict__` only to that case.
+
+Change:
+- Added a specialized default bf16 dim 32768 kernel with restricted row pointers.
+- Kept the same generic bf16 input/output conversion, float Hadamard arithmetic, conditional cross-warp add/sub, 128 KiB exchange tile, and bf16 dim 32768 pre-exchange barrier behavior.
+- Routed only exact `params.dim == 32768` bf16 default calls through the specialized kernel.
+
+Result:
+- Targeted artifact: `benchmark_results/exp092_bf16_32768_restrict_specialized_h200_20260528.json`.
+- Full default artifact: `benchmark_results/current_default_precision_exp092_bf16_32768_restrict_full_h200_20260528.json`.
+- bf16 dim 32768 improved from 342.304 us in the accepted Experiment 081 repeat to 334.896 us targeted and 331.024 us in the full sweep.
+- Full default geometric speedup remained effectively unchanged because this affects one case: 1.279x versus 1.279x before, still far short of 1.5x.
+- Decision: accept as a narrow precision-preserving compounding win.

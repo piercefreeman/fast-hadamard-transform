@@ -621,6 +621,59 @@ void fast_hadamard_transform_kernel(HadamardParamsBase params) {
         params, smem_);
 }
 
+__global__ __launch_bounds__(512)
+void fast_hadamard_transform_bfloat16_32768_restrict_kernel(HadamardParamsBase params) {
+    using input_t = at::BFloat16;
+    using Ktraits = fast_hadamard_transform_kernel_traits<512, 15, input_t>;
+    using vec_t = typename Ktraits::vec_t;
+
+    constexpr int kNThreads = Ktraits::kNThreads;
+    constexpr int kNElts = Ktraits::kNElts;
+    constexpr int kNChunks = Ktraits::kNChunks;
+    constexpr int kWarpSize = 32;
+    constexpr int kNWarps = kNThreads / kWarpSize;
+    constexpr int kChunksPerExchange =
+        Ktraits::kSmemExchangeSize / (sizeof(vec_t) * Ktraits::kNExchangePerVec * kNThreads);
+    static_assert(kNElts == 8);
+    static_assert(kNChunks == 8);
+    static_assert(kNWarps == 16);
+    static_assert(kChunksPerExchange == kNChunks);
+
+    extern __shared__ char smem_[];
+    vec_t *smem_exchange = reinterpret_cast<vec_t *>(smem_);
+
+    const int batch_id = blockIdx.x;
+    input_t *__restrict__ x = reinterpret_cast<input_t *>(params.x_ptr) + batch_id * params.x_batch_stride;
+    input_t *__restrict__ out = reinterpret_cast<input_t *>(params.out_ptr) + batch_id * params.out_batch_stride;
+
+    float x_vals[kNChunks][kNElts];
+    load_input<kNChunks, kNElts, input_t>(x, x_vals, params.dim);
+
+    hadamard_mult_thread<3, kNChunks>(x_vals);
+    hadamard_mult_warp_conditional<5, 0, kNChunks, kNElts>(x_vals);
+
+    exchange_smem_pre<kNChunks, kChunksPerExchange, kNElts, kWarpSize, kNWarps,
+                       true, false, vec_t>(x_vals, smem_exchange);
+    hadamard_mult_warp_conditional<4, 0, kNChunks, kNElts>(x_vals);
+    exchange_smem_pre<kNChunks, kChunksPerExchange, kNElts, kWarpSize, kNWarps,
+                       false, false, vec_t>(x_vals, smem_exchange);
+
+    float x_vals_transposed[kNElts][kNChunks];
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        #pragma unroll
+        for (int i = 0; i < kNElts; ++i) { x_vals_transposed[i][c] = x_vals[c][i]; }
+    }
+    hadamard_mult_thread<3, kNElts>(x_vals_transposed);
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        #pragma unroll
+        for (int i = 0; i < kNElts; ++i) { x_vals[c][i] = x_vals_transposed[i][c]; }
+    }
+
+    store_output<kNChunks, kNElts, input_t>(out, x_vals, params.dim, params.scale);
+}
+
 template<typename Ktraits>
 __device__ __forceinline__ void fast_hadamard_transform_lowp_exchange_kernel_body(HadamardParamsBase params) {
     constexpr int kNThreads = Ktraits::kNThreads;
@@ -1308,6 +1361,17 @@ void fast_hadamard_transform_launch(HadamardParamsBase &params, cudaStream_t str
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
+void fast_hadamard_transform_bfloat16_32768_restrict_launch(HadamardParamsBase &params, cudaStream_t stream) {
+    using Ktraits = fast_hadamard_transform_kernel_traits<512, 15, at::BFloat16>;
+    constexpr int kSmemSize = Ktraits::kSmemSize;
+    dim3 grid(params.batch);
+    auto kernel = &fast_hadamard_transform_bfloat16_32768_restrict_kernel;
+    C10_CUDA_CHECK(cudaFuncSetAttribute(
+        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+    kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
 template<int kNThreads, int kLogN, typename input_t>
 void fast_hadamard_transform_lowp_exchange_launch(HadamardParamsBase &params, cudaStream_t stream) {
     using Ktraits = fast_hadamard_transform_lowp_exchange_kernel_traits<kNThreads, kLogN, input_t>;
@@ -1481,6 +1545,8 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
         } else if constexpr (std::is_same_v<input_t, at::BFloat16>) {
             if (params.fast_low_precision) {
                 fast_hadamard_transform_bfloat162_launch<512, 15>(params, stream);
+            } else if (params.dim == 32 * 1024) {
+                fast_hadamard_transform_bfloat16_32768_restrict_launch(params, stream);
             } else {
                 fast_hadamard_transform_launch<512, 15, input_t, true>(params, stream);
             }
