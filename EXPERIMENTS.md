@@ -1568,3 +1568,33 @@ Result:
 - The intermediate shape was still slower than accepted: fp16 dim 4096 measured 250.384 us, fp16 dim 8192 257.104 us, and bf16 dim 16384 289.696 us.
 - fp32 guardrails were unaffected.
 - Decision: reject and restore the standard 256-thread, 8-element launch shape.
+
+## Experiment 112: Broad 16-Bit Even-Dimension Pre-Scale
+
+Hypothesis: for even power-of-two dimensions, the benchmark normalization scale is an exact power of two. Applying that scale after load and storing with scale 1 may be rounding-equivalent while moving work away from the output conversion path.
+
+Change:
+- Temporarily added a `kPreScale` main-kernel instantiation.
+- Routed default fp16/bf16 dims 4096 and 16384 through the pre-scale variant.
+
+Result:
+- Artifact: `benchmark_results/exp112_16bit_even_dim_prescale_h200_20260528.json`.
+- bf16 dim 16384 improved to 241.920 us, but fp16 dim 16384 regressed slightly to 246.688 us and dims 4096 were neutral.
+- Decision: reject the broad route and narrow the useful signal to bf16 dim 16384.
+
+## Experiment 113: Guarded bf16 16384 Pre-Scale
+
+Hypothesis: the useful pre-scale signal is specific to bf16 dim 16384. Guarding it on exact `params.dim == 16384` and exact power-of-two scale `1/128` should preserve general API behavior while capturing the measured win.
+
+Change:
+- Kept the `kPreScale` kernel instantiation.
+- Routed only default bf16 dim 16384 with `params.scale == 0.0078125f` through the pre-scale variant.
+- All other dtypes, dimensions, and scale values stay on the accepted post-scale route.
+
+Result:
+- Targeted artifact: `benchmark_results/exp113_bf16_16384_prescale_guarded_h200_20260528.json`.
+- Full default artifact: `benchmark_results/current_default_precision_exp113_bf16_16384_prescale_full_h200_20260528.json`.
+- bf16 dim 16384 improved from 247.584 us in the accepted Exp104 full artifact to 242.112 us in the Exp113 full sweep.
+- Full default precision-preserving speedup improved from 1.2812x to 1.2844x versus the original baseline.
+- Precision check: for dim 16384, PyTorch reference post-scale and pre-scale forms were bitwise identical after bf16 rounding; kernel max abs versus the fp32 reference stayed in the established bf16 range.
+- Decision: accept as a narrow precision-preserving scale-placement win.
