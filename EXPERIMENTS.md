@@ -2017,3 +2017,21 @@ Result:
 - Narrow result: fp32 dim 512 remained only noise-scale at 71.376 us, while fp32 dim 1024 regressed to 134.992 us versus 134.880 us in the accepted Exp139 repeat2 artifact. Guardrail fp32 dims 256 and 2048 were normal once their exact routes were removed.
 - Precision note: this would have preserved fp32 arithmetic, but the codegen/timing result was not useful enough to keep.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
+
+## Experiment 141: Narrow fp16 Exact I/O for 8192 and 16384
+
+Hypothesis: under the accepted Exp139 codegen, routing only default fp16 dim 8192 and 16384 through exact-I/O instantiations could remove boundary checks and zero-fill work without changing arithmetic precision. The earlier broad exact-I/O attempts were too noisy, so this retested only the two weak fp16 cells.
+
+Change:
+- Temporarily routed default fp16 dim 8192 through `fast_hadamard_transform_grid_constant_launch<256, 13, input_t, false, false, true>`.
+- Temporarily routed default fp16 dim 16384 through `fast_hadamard_transform_launch<256, 14, input_t, false, false, true>`.
+- Left bf16, fp32, and `fast_low_precision=True` native half2/bfloat162 routes unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp141_fp16_8192_16384_exact_io_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- fp16 dim 8192 regressed to 239.840 us versus 231.328 us in the accepted Exp139 repeat2 artifact.
+- fp16 dim 16384 regressed to 252.528 us versus 245.792 us in the accepted Exp139 repeat2 artifact.
+- Guardrail cells were neutral-to-normal: bf16 dim 8192 235.904 us, bf16 dim 16384 233.872 us, fp32 dim 8192 142.416 us, and fp32 dim 16384 149.296 us.
+- Precision note: this experiment would have preserved float intermediates and the standard fp16 output conversion. It only changed exact-dimension I/O specialization, but the codegen/timing result was slower.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
