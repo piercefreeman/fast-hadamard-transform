@@ -2149,3 +2149,25 @@ Result:
 - Neighboring guardrails stayed normal: fp16 dim 8192 231.440 us, fp16 dim 32768 306.848 us, bf16 dim 8192 235.680 us, bf16 dim 16384 234.112 us, bf16 dim 32768 325.552 us, fp32 dim 8192 141.888 us, fp32 dim 16384 147.936 us, and fp32 dim 32768 194.672 us.
 - Precision note: this experiment preserved float intermediates and standard fp16 output conversion. It only moved the exact power-of-two scale into the float path for one guarded fp16 dimension, so the regression is performance/codegen-related rather than a precision tradeoff.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
+
+## Experiment 148: 16-Bit 8192/16384 16-Element Main-Kernel Shape
+
+Hypothesis: default fp16/bf16 dims 8192 and 16384 still spend substantial time in the main-kernel chunk layout. Keeping the same 256-thread launches but widening the per-thread vector shape from 8 to 16 16-bit inputs could reduce chunk-loop and vector-I/O overhead while preserving float intermediates and standard fp16/bf16 output conversion.
+
+Change:
+- Temporarily added a kernel-traits element-count override and specialized 16-element fp16/bf16 vectorized float-intermediate I/O helpers.
+- Routed default fp16/bf16 dims 8192 and 16384 through the 16-element shape.
+- Preserved the existing grid-constant wrapper for fp16 dim 8192 and the accepted guarded bf16 dim 16384 pre-scale route.
+- Left fp32 and `fast_low_precision=True` native half2/bfloat162 routes unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp148_16bit_8192_16384_16elts_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- ptxas showed no spills for the new fp16 16-element 8192 and 16384 instantiations, but runtime performance was much worse.
+- fp16 dim 8192 regressed to 320.112 us versus 231.328 us in the accepted Exp139 repeat2 artifact.
+- fp16 dim 16384 regressed to 326.464 us versus 245.792 us.
+- bf16 dim 8192 regressed to 336.224 us versus 235.840 us.
+- bf16 dim 16384 regressed to 324.960 us versus 233.840 us.
+- fp32 guardrails were normal: fp32 dim 8192 143.008 us and fp32 dim 16384 149.824 us.
+- Precision note: this experiment preserved float intermediates and standard fp16/bf16 output conversion. It changed only the on-chip vector/chunk layout and exact I/O packing width for the tested 16-bit main-kernel routes.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
