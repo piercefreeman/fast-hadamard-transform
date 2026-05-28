@@ -1890,3 +1890,88 @@ Result:
 - Rejection audit artifact: `benchmark_results/compare_exp127_vs_exp126_bootstrap_h200_20260528.json`.
 - Exp127 versus Exp126: 0.998359x geometric speedup; bootstrap p95 was 0.999151x, confirming the rejected full-suite candidate did not beat accepted Exp126 despite its isolated bf16 8192 cell win.
 - Decision: accept the comparator as part of the benchmark protocol for future narrow-route decisions.
+
+## Experiment 134: Serial Two-Row CTA for 16-Bit 4096
+
+Hypothesis: default fp16/bf16 dim 4096 is still block-scheduling and exchange-bound. Running two independent rows serially inside one CTA can reuse the existing float-intermediate body and shared tile while halving CTA count, without changing per-row arithmetic or output conversion.
+
+Change:
+- Temporarily refactored the main kernel body to accept an explicit batch id.
+- Added a serial rows-per-CTA launch wrapper.
+- Routed only default fp16/bf16 `log_N == 12` through the 2-row serial wrapper.
+
+Result:
+- Artifact: `benchmark_results/exp134_16bit_4096_serial_rows2_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- fp16 dim 4096 regressed to 233.680 us versus 231.920 us in the accepted Exp126 repeat artifact.
+- bf16 dim 4096 regressed to 233.216 us versus 231.024 us in the accepted Exp126 repeat artifact.
+- Decision: reject and restore the accepted one-row CTA route.
+
+## Experiment 135: One-Warp 16-Bit 4096 Layout
+
+Hypothesis: dim 4096 may be better served by one warp per row instead of the 256-thread shared-memory exchange layout. This removes both cross-warp exchanges and CTA barriers. It increases per-thread chunk state from 2 chunks to 16 chunks, but still uses the existing float-intermediate one-warp kernel and the same output dtype conversion.
+
+Change:
+- Temporarily routed default fp16/bf16 `log_N == 12` through `fast_hadamard_transform_one_warp_launch<1, 12, input_t>`.
+- Kept fp32 dim 4096 as a guardrail.
+
+Result:
+- Artifact: `benchmark_results/exp135_16bit_4096_one_warp_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- ptxas reported 167 registers and no spills for the new fp16 dim 4096 one-warp entry.
+- fp16 dim 4096 improved to 173.728 us versus 231.920 us in the accepted Exp126 repeat artifact.
+- bf16 dim 4096 improved to 173.184 us versus 231.024 us in the accepted Exp126 repeat artifact.
+- Decision: promising; tune rows per block and full-suite impact before accepting.
+
+## Experiment 136: One-Warp 16-Bit 4096 Rows Per Block = 2
+
+Hypothesis: once dim 4096 uses one warp per row, grouping two rows per CTA might recover some block-scheduling overhead without changing per-row math.
+
+Change:
+- Changed the default fp16/bf16 dim 4096 one-warp route from 1 row per CTA to 2 rows per CTA.
+
+Result:
+- Artifact: `benchmark_results/exp136_16bit_4096_one_warp_rows2_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- fp16 dim 4096 measured 174.496 us, slower than 173.728 us with 1 row per CTA.
+- bf16 dim 4096 measured 173.520 us, slower than 173.184 us with 1 row per CTA.
+- Decision: reject rows-per-block = 2 and keep 1 row per CTA for dim 4096.
+
+## Experiment 137: One-Warp 16-Bit 8192 Layout
+
+Hypothesis: the same no-shared-exchange one-warp layout may help dim 8192, another weak 16-bit cell, if avoiding CTA barriers outweighs the larger per-thread chunk state.
+
+Change:
+- Kept the default fp16/bf16 dim 4096 one-warp route from Experiment 135.
+- Temporarily routed default fp16/bf16 dim 8192 through `fast_hadamard_transform_one_warp_launch<1, 13, input_t>`.
+
+Result:
+- Artifact: `benchmark_results/exp137_16bit_4096_8192_one_warp_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- ptxas reported heavy spilling for the fp16 dim 8192 one-warp entry: 255 registers, 304-byte stack, 844 bytes spill stores, and 884 bytes spill loads.
+- fp16 dim 8192 regressed to 348.384 us versus 231.264 us in the accepted Exp126 repeat artifact.
+- bf16 dim 8192 regressed to 365.696 us versus 235.360 us in the accepted Exp126 repeat artifact.
+- Decision: reject the dim 8192 one-warp route and restore the accepted 8192 routes.
+
+## Experiment 138: Accept One-Warp 16-Bit 4096
+
+Hypothesis: the strong isolated fp16/bf16 4096 one-warp win from Experiment 135 is large enough to survive full-suite movement and improve the default precision-preserving path.
+
+Change:
+- Routed default fp16/bf16 `log_N == 12` through `fast_hadamard_transform_one_warp_launch<1, 12, input_t>`.
+- Kept fast-low-precision native half2/bfloat162 routes gated behind `fast_low_precision=True`.
+- Restored accepted 8192 and larger routes.
+
+Result:
+- Full artifacts:
+  - `benchmark_results/current_default_precision_exp138_4096_one_warp_full_h200_20260528.json`: 115.039 us geometric mean, 1.317696x over baseline.
+  - `benchmark_results/current_default_precision_exp138_4096_one_warp_full_h200_20260528_repeat2.json`: 115.182 us geometric mean, 1.316053x over baseline.
+- Bootstrap comparison artifacts:
+  - `benchmark_results/compare_exp138_vs_baseline_bootstrap_h200_20260528.json`: bootstrap median 1.317661x, p05/p95 1.316991x/1.318268x.
+  - `benchmark_results/compare_exp138_vs_exp126_bootstrap_h200_20260528.json`: 1.023732x over Exp126, bootstrap p05/p95 1.023193x/1.024530x.
+  - `benchmark_results/compare_exp138_repeat2_vs_baseline_bootstrap_h200_20260528.json`: bootstrap median 1.315909x, p05/p95 1.315079x/1.316594x.
+  - `benchmark_results/compare_exp138_repeat2_vs_exp126_bootstrap_h200_20260528.json`: 1.022456x over Exp126, bootstrap p05/p95 1.021724x/1.023205x.
+- Repeat2 dtype speedups versus the original baseline: fp16 1.430886x, bf16 1.417490x, fp32 1.123815x.
+- Unit verification after final build: `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py`, 55 passed in 158.06s.
+- Precision note: this route keeps float intermediates and the standard dtype output conversion. It changes the on-chip layout and removes shared-memory exchange for dim 4096; it does not use native half2/bfloat162 arithmetic.
+- Decision: accept. The default precision-preserving path improves from the Exp126 repeat2 speedup of 1.287149x to 1.316053x-1.317696x. The requested 1.5x default target remains unmet; from the repeat2 value, another roughly 13.98% speedup from here is still required.

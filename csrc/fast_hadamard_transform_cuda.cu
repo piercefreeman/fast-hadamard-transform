@@ -1541,13 +1541,13 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
             if (params.fast_low_precision) {
                 fast_hadamard_transform_half2_launch<256, 12>(params, stream);
             } else {
-                fast_hadamard_transform_launch<256, 12, input_t, false, true>(params, stream);
+                fast_hadamard_transform_one_warp_launch<1, 12, input_t>(params, stream);
             }
         } else if constexpr (std::is_same_v<input_t, at::BFloat16>) {
             if (params.fast_low_precision) {
                 fast_hadamard_transform_bfloat162_launch<256, 12>(params, stream);
             } else {
-                fast_hadamard_transform_launch<256, 12, input_t, false, true>(params, stream);
+                fast_hadamard_transform_one_warp_launch<1, 12, input_t>(params, stream);
             }
         } else {
             fast_hadamard_transform_lowp_exchange_launch<256, 12, input_t>(params, stream);
