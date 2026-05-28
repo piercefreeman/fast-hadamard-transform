@@ -1830,3 +1830,18 @@ Result:
 - fp32 dim 512 regressed to 72.960 us versus 71.472 us in the accepted Exp126 repeat artifact.
 - fp32 dim 1024 regressed to 135.536 us versus 134.848 us in the accepted Exp126 repeat artifact.
 - Decision: reject and keep fp32 dims 512 and 1024 on the standard single-row 32-thread launches.
+
+## Experiment 130: fp32 1024/2048 Direct Chunk Stage Retest
+
+Hypothesis: the final per-thread chunk Hadamard for fp32 dims 1024 and 2048 may spend more time copying through the transposed register tile than doing useful math. Replacing the transpose-based chunk stage with an equivalent direct in-register chunk butterfly for just those fp32 routes may reduce register movement without changing arithmetic precision.
+
+Change:
+- Temporarily added a direct power-of-two chunk-stage helper.
+- Routed only fp32 dims 1024 and 2048 through it.
+
+Result:
+- Targeted artifact: `benchmark_results/exp130_fp32_1024_2048_direct_chunk_h200_20260528.json`.
+- Full artifact: `benchmark_results/current_default_precision_exp130_fp32_direct_chunk_full_h200_20260528.json`.
+- The targeted run showed only noise-scale gains: fp32 dim 1024 was 134.576 us and dim 2048 was 136.496 us.
+- The full sweep regressed to 1.2855x over baseline versus 1.2871x in the accepted Exp126 repeat artifact.
+- Decision: reject and keep the transpose-based chunk stage.
