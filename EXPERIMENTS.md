@@ -1511,3 +1511,31 @@ Result:
 - bf16 dim 32768 regressed to 346.336 us versus the accepted 326 us range.
 - fp16 and fp32 guardrails were normal because they do not use this launch path.
 - Decision: reject and keep only the dynamic shared-memory size attribute.
+
+## Experiment 108: No XOR Shared-Memory Exchange Swizzle
+
+Hypothesis: H200 shared-memory behavior may prefer a simpler exchange layout than the current XOR swizzle. Removing the swizzle tests whether the existing layout is still the right bank-conflict tradeoff.
+
+Change:
+- Temporarily removed the `^ warp_id` and `^ row_t` shared-memory index swizzles in the default float exchange helper.
+- Benchmarked dimensions 4096 through 32768 for fp16, bf16, and fp32.
+
+Result:
+- Artifact: `benchmark_results/exp108_exchange_no_xor_swizzle_h200_20260528.json`.
+- The swizzle is critical: fp16 dim 4096 regressed to 455.456 us, bf16 dim 4096 to 456.160 us, and fp32 dim 8192 to 252.752 us.
+- Large fp16/bf16 cases were roughly 2x slower across the board.
+- Decision: reject and keep the XOR exchange swizzle.
+
+## Experiment 109: Shifted XOR Shared-Memory Exchange Swizzle
+
+Hypothesis: a different XOR mask may improve H200 shared-memory bank behavior while preserving the exchange permutation. `col ^ (row << 1)` keeps the mask within the 32-column row for the current 8- and 16-warp exchange shapes.
+
+Change:
+- Temporarily replaced the exchange swizzle from `col ^ row` to `col ^ (row << 1)` in the default float exchange helper.
+- Benchmarked dimensions 4096 through 32768 for fp16, bf16, and fp32.
+
+Result:
+- Artifact: `benchmark_results/exp109_exchange_xor_row_shift1_h200_20260528.json`.
+- The shifted mask was worse than the accepted swizzle: fp16 dim 4096 regressed to 262.240 us, fp16 dim 8192 to 268.736 us, and bf16 dim 32768 to 356.128 us.
+- fp32 large cases also regressed.
+- Decision: reject and restore the original `col ^ row` swizzle.
