@@ -2116,3 +2116,20 @@ Result:
 - Neighboring guardrails were normal: bf16 dim 8192 235.696 us, bf16 dim 32768 326.128 us, fp16 dim 32768 306.752 us, fp32 dim 16384 148.864 us, and fp32 dim 32768 194.432 us.
 - Precision note: this experiment would have preserved float intermediates and standard bf16 output conversion; it only removed exact-dimension I/O guards in the already-accepted pre-scale route. The regression is a codegen/performance issue, not a precision tradeoff.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
+
+## Experiment 146: fp16 8192 Read-Only Vector Load
+
+Hypothesis: Experiment 102 had a small fp16 dim 8192 signal from read-only vector loads before the later grid-constant and exact-I/O changes. Retesting only the current fp16 dim 8192 grid-constant route with `__ldg` input vector loads may improve the weak 8192 cell without affecting arithmetic precision or other dtypes.
+
+Change:
+- Temporarily added an fp16 read-only vector load helper using `__ldg`.
+- Routed only default fp16 dim 8192 through that load helper on the accepted grid-constant route.
+- Kept the same fp16-to-float conversion, float Hadamard arithmetic, standard fp16 output conversion, and `fast_low_precision=True` native half2 route.
+
+Result:
+- Artifact: `benchmark_results/exp146_fp16_8192_ldg_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- fp16 dim 8192 measured 231.776 us versus 231.328 us in the accepted Exp139 repeat2 artifact, so the intended cell moved slightly slower.
+- Guardrails were normal: fp16 dim 16384 245.600 us, bf16 dim 8192 235.968 us, bf16 dim 16384 233.856 us, fp32 dim 8192 142.320 us, and fp32 dim 16384 149.248 us.
+- Precision note: this experiment preserved float intermediates and standard fp16 output conversion. It changed only the global input load cache path for one exact route.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
