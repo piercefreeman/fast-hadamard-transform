@@ -1213,3 +1213,43 @@ Result:
 - Artifact: `benchmark_results/exp085_bf16_32768_pre_sync_skip_retest_h200_20260528.json`.
 - bf16 dim 32768 regressed to 344.240 us; fp16 dim 32768 was neutral at 306.880 us.
 - Decision: reject and keep the existing bf16 dim 32768 exception.
+
+## Experiment 086: bf16 32768 Exact Main-Kernel I/O
+
+Hypothesis: the accepted fp16 dim 32768 exact-I/O route may have a bf16 analog. Guarding bf16 dim 32768 on `params.dim == 32768` can remove boundary checks and zero initialization while still converting inputs to float before all Hadamard arithmetic.
+
+Change:
+- Temporarily added exact bf16 main-kernel load/store helpers.
+- Routed default bf16 dim 32768 through those helpers only for exact 32768-wide rows.
+
+Result:
+- Artifact: `benchmark_results/exp086_bf16_32768_exact_main_io_h200_20260528.json`.
+- bf16 dim 32768 regressed to 362.016 us. fp16 dim 32768 guardrail was neutral at 307.152 us.
+- Decision: reject and keep the generic guarded bf16 dim 32768 I/O path.
+
+## Experiment 087: Large 16-Bit Conditional Add/Sub Retest
+
+Hypothesis: after vectorized float-intermediate I/O and selective exact I/O, the large fp16/bf16 default routes may benefit from the conditional add/sub warp helper that avoids the sign-multiply form.
+
+Change:
+- Temporarily routed default fp16/bf16 dims 8192 and 16384 through conditional add/sub.
+- Temporarily routed default fp16 dim 32768 through conditional add/sub while preserving the exact-I/O guard. bf16 dim 32768 was already on the conditional route.
+
+Result:
+- Artifact: `benchmark_results/exp087_large_16bit_conditional_addsub_retest_h200_20260528.json`.
+- Regressed every changed fp16/bf16 target: fp16 dim 8192 241.600 us, fp16 dim 16384 251.024 us, fp16 dim 32768 312.784 us, bf16 dim 8192 239.584 us, and bf16 dim 16384 255.040 us.
+- Decision: reject and restore the prior selective conditional routing.
+
+## Experiment 088: Direct Power-of-Two Chunk Stage
+
+Hypothesis: the final per-thread chunk Hadamard for power-of-two chunk counts may spend avoidable register moves transposing `x_vals` into `x_vals_transposed` and back. Applying the same chunk butterflies directly in `x_vals` should preserve float arithmetic while reducing register-copy work.
+
+Change:
+- Temporarily added a direct power-of-two chunk-stage helper.
+- Routed the main float-intermediate kernel and low-precision exchange kernel through the direct helper for power-of-two chunk counts.
+
+Result:
+- Artifact: `benchmark_results/exp088_direct_power2_chunk_stage_h200_20260528.json`.
+- Geometric mean over the 18 common targeted cases was 0.9996x versus the accepted Experiment 081 route.
+- Isolated small wins, such as fp32 dim 8192 at 140.576 us, did not offset regressions like bf16 dim 2048 at 135.984 us and fp32 dim 16384 at 148.608 us.
+- Decision: reject and restore the transpose-based chunk stage.
