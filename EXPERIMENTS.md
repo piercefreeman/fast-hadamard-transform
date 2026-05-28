@@ -1721,3 +1721,17 @@ Result:
 - fp32 dim 8192 regressed to 142.128 us versus 141.376 us in the accepted full artifact.
 - fp16 dim 4096 regressed slightly to 231.984 us, while fp16 dim 8192 and bf16 dim 4096 moved only at noise scale.
 - Decision: reject and keep the standard launch-bounds annotations.
+
+## Experiment 123: fp32 8192 512-Thread Retest
+
+Hypothesis: fp32 dim 8192 may respond differently to a 512-thread launch under the current direct-I/O code than it did in the early broad launch-width experiment. This changes only the launch shape and keeps fp32 arithmetic unchanged.
+
+Change:
+- Temporarily routed fp32 dim 8192 through the 512-thread main-kernel launch.
+- Benchmarked fp32 dims 4096, 8192, and 16384 with correctness enabled.
+
+Result:
+- Artifact: `benchmark_results/exp123_fp32_8192_512_threads_current_h200_20260528.json`.
+- fp32 dim 8192 regressed to 163.216 us versus 141.376 us in the accepted full artifact.
+- fp32 dim 4096 and 16384 guardrails stayed near the expected range.
+- Decision: reject and keep fp32 dim 8192 on the 256-thread launch.
