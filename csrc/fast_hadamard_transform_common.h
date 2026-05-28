@@ -123,6 +123,25 @@ __device__ __forceinline__ void hadamard_mult_warp(float x[kNChunks][kNItems]) {
     }
 }
 
+template<int kLogWarpSize, int kStepStart, int kNChunks, int kNItems>
+__device__ __forceinline__ void hadamard_mult_warp_conditional(float x[kNChunks][kNItems]) {
+    constexpr int N = 1 << kLogWarpSize;
+    int lane_id = threadIdx.x % N;
+    #pragma unroll
+    for (int step = kStepStart; step < kLogWarpSize; ++step) {
+        const int lane_mask = 1 << step;
+        const bool subtract = lane_id & lane_mask;
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            #pragma unroll
+            for (int i = 0; i < kNItems; ++i) {
+                const float other = __shfl_xor_sync(FULL_MASK, x[c][i], lane_mask);
+                x[c][i] = subtract ? other - x[c][i] : x[c][i] + other;
+            }
+        }
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <int kNChunks, int kNElts, typename input_t>
@@ -142,6 +161,22 @@ inline __device__ void load_input(input_t *x, float x_vals[kNChunks][kNElts], in
     }
 }
 
+template <int kNChunks, int kNElts, typename input_t>
+inline __device__ void load_input_warp(input_t *x, float x_vals[kNChunks][kNElts], int dim, int lane_id) {
+    using vec_t = typename BytesToType<sizeof(input_t) * kNElts>::Type;
+    input_t x_vals_load[kNChunks][kNElts] = {0};
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        if ((c * 32 + lane_id) * kNElts < dim) {
+            reinterpret_cast<vec_t*>(x_vals_load)[c] = reinterpret_cast<const vec_t*>(x)[c * 32 + lane_id];
+        }
+    }
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        #pragma unroll
+        for (int i = 0; i < kNElts; ++i) { x_vals[c][i] = float(x_vals_load[c][i]); }
+    }
+}
 
 template <int kNChunks, int kNElts, typename output_t>
 inline __device__ void store_output(output_t *out, float out_vals[kNChunks][kNElts], int dim, float scale=1.f) {
@@ -156,6 +191,23 @@ inline __device__ void store_output(output_t *out, float out_vals[kNChunks][kNEl
     for (int c = 0; c < kNChunks; ++c) {
         if ((c * blockDim.x + threadIdx.x) * kNElts < dim) {
             reinterpret_cast<vec_t*>(out)[c * blockDim.x + threadIdx.x] = reinterpret_cast<const vec_t*>(out_vals_store)[c];
+        }
+    }
+}
+
+template <int kNChunks, int kNElts, typename output_t>
+inline __device__ void store_output_warp(output_t *out, float out_vals[kNChunks][kNElts], int dim, int lane_id, float scale=1.f) {
+    using vec_t = typename BytesToType<sizeof(output_t) * kNElts>::Type;
+    output_t out_vals_store[kNChunks][kNElts];
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        #pragma unroll
+        for (int i = 0; i < kNElts; ++i) { out_vals_store[c][i] = out_vals[c][i] * scale; }
+    }
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        if ((c * 32 + lane_id) * kNElts < dim) {
+            reinterpret_cast<vec_t*>(out)[c * 32 + lane_id] = reinterpret_cast<const vec_t*>(out_vals_store)[c];
         }
     }
 }
@@ -188,6 +240,39 @@ inline __device__ void exchange_smem_pre(float x_vals[kNChunks][kNElts], vec_t *
             #pragma unroll
             for (int r = 0; r < kNExchangePerVec; ++r) {
                 reinterpret_cast<vec_t*>(x_vals[c0 * kChunksPerExchange + c1])[r] = smem[(c1 * kNExchangePerVec + r) * kNThreads + (Pre ? row_t * kWarpSize + col_t ^ row_t : warp_id * kWarpSize + lane_id ^ warp_id)];
+            }
+        }
+    }
+}
+
+template <int kNChunks, int kChunksPerExchange, int kNElts, int kWarpSize, int kNWarps, bool Pre, typename exchange_t, typename vec_t>
+inline __device__ void exchange_smem_pre_cast(float x_vals[kNChunks][kNElts], vec_t *smem) {
+    constexpr int kNThreads = kWarpSize * kNWarps;
+    const int warp_id = threadIdx.x / kWarpSize;
+    const int lane_id = threadIdx.x % kWarpSize;
+    const int row_t = threadIdx.x % kNWarps;
+    const int col_t = threadIdx.x / kNWarps;
+    exchange_t x_vals_exchange[kNElts];
+    #pragma unroll
+    for (int c0 = 0; c0 < kNChunks / kChunksPerExchange; ++c0) {
+        __syncthreads();
+        #pragma unroll
+        for (int c1 = 0; c1 < kChunksPerExchange; ++c1) {
+            #pragma unroll
+            for (int i = 0; i < kNElts; ++i) {
+                x_vals_exchange[i] = x_vals[c0 * kChunksPerExchange + c1][i];
+            }
+            smem[c1 * kNThreads + (Pre ? warp_id * kWarpSize + lane_id ^ warp_id : row_t * kWarpSize + col_t ^ row_t)] =
+                reinterpret_cast<vec_t*>(x_vals_exchange)[0];
+        }
+        __syncthreads();
+        #pragma unroll
+        for (int c1 = 0; c1 < kChunksPerExchange; ++c1) {
+            reinterpret_cast<vec_t*>(x_vals_exchange)[0] =
+                smem[c1 * kNThreads + (Pre ? row_t * kWarpSize + col_t ^ row_t : warp_id * kWarpSize + lane_id ^ warp_id)];
+            #pragma unroll
+            for (int i = 0; i < kNElts; ++i) {
+                x_vals[c0 * kChunksPerExchange + c1][i] = float(x_vals_exchange[i]);
             }
         }
     }

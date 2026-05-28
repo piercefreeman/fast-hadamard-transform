@@ -16,22 +16,31 @@ import fast_hadamard_transform_cuda
 class HadamardTransformFn(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, scale=1.0):
+    def forward(ctx, x, scale=1.0, fast_low_precision=False):
         ctx._hadamard_transform_scale = scale
-        return fast_hadamard_transform_cuda.fast_hadamard_transform(x, scale)
+        ctx._hadamard_transform_fast_low_precision = fast_low_precision
+        return fast_hadamard_transform_cuda.fast_hadamard_transform(x, scale, fast_low_precision)
 
     @staticmethod
     def backward(ctx, dout):
         # The Hadamard transform matrix is symmetric, so in the backward pass we multiply by its
         # transpose, which is itself.
-        return fast_hadamard_transform_cuda.fast_hadamard_transform(dout, ctx._hadamard_transform_scale), None
+        return (
+            fast_hadamard_transform_cuda.fast_hadamard_transform(
+                dout, ctx._hadamard_transform_scale, ctx._hadamard_transform_fast_low_precision
+            ),
+            None,
+            None,
+        )
 
 
-def hadamard_transform(x, scale=1.0):
+def hadamard_transform(x, scale=1.0, fast_low_precision=False):
     """
     Arguments:
         x: (..., dim)
         scale: float. Multiply the output by this number.
+        fast_low_precision: bool. If True, use faster native fp16/bf16 arithmetic kernels for
+            supported power-of-two dimensions. If False, fp16/bf16 use float-intermediate kernels.
     Returns:
         out: (..., dim)
 
@@ -39,7 +48,9 @@ def hadamard_transform(x, scale=1.0):
     Equivalent to F.linear(x, torch.tensor(scipy.linalg.hadamard(dim))) * scale.
     If dim is not a power of 2, we implicitly pad x with zero so that dim is the next power of 2.
     """
-    return HadamardTransformFn.apply(x, scale)
+    if not torch.is_grad_enabled() or not x.requires_grad:
+        return fast_hadamard_transform_cuda.fast_hadamard_transform(x, scale, fast_low_precision)
+    return HadamardTransformFn.apply(x, scale, fast_low_precision)
 
 
 class HadamardTransform12NFn(torch.autograd.Function):
@@ -67,6 +78,8 @@ def hadamard_transform_12N(x, scale=1.0):
     Multiply each row of x by the Hadamard transform matrix, where dim = 12 * power of 2.
     If dim is not 12 * a power of 2, we implicitly pad x with zero so that dim is 12 * the next power of 2.
     """
+    if not torch.is_grad_enabled() or not x.requires_grad:
+        return fast_hadamard_transform_cuda.fast_hadamard_transform_12N(x, scale)
     return HadamardTransform12NFn.apply(x, scale)
 
 
@@ -96,6 +109,8 @@ def hadamard_transform_20N(x, scale=1.0):
     Multiply each row of x by the Hadamard transform matrix, where dim = 20 * power of 2.
     If dim is not 20 * a power of 2, we implicitly pad x with zero so that dim is 20 * the next power of 2.
     """
+    if not torch.is_grad_enabled() or not x.requires_grad:
+        return fast_hadamard_transform_cuda.fast_hadamard_transform_20N(x, scale)
     return HadamardTransform20NFn.apply(x, scale)
 
 
@@ -124,6 +139,8 @@ def hadamard_transform_28N(x, scale=1.0):
     Multiply each row of x by the Hadamard transform matrix, where dim = 28 * power of 2.
     If dim is not 28 * a power of 2, we implicitly pad x with zero so that dim is 28 * the next power of 2.
     """
+    if not torch.is_grad_enabled() or not x.requires_grad:
+        return fast_hadamard_transform_cuda.fast_hadamard_transform_28N(x, scale)
     return HadamardTransform28NFn.apply(x, scale)
 
 
@@ -151,6 +168,8 @@ def hadamard_transform_40N(x, scale=1.0):
     Multiply each row of x by the Hadamard transform matrix, where dim = 40 * power of 2.
     If dim is not 40 * a power of 2, we implicitly pad x with zero so that dim is 40 * the next power of 2.
     """
+    if not torch.is_grad_enabled() or not x.requires_grad:
+        return fast_hadamard_transform_cuda.fast_hadamard_transform_40N(x, scale)
     return HadamardTransform40NFn.apply(x, scale)
 
 def hadamard_transform_ref(x, scale=1.0):

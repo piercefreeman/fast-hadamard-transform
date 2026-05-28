@@ -15,6 +15,7 @@ struct HadamardParamsBase {
     index_t out_batch_stride;
 
     float scale;
+    bool fast_low_precision;
 
     // Common data pointers.
     void *__restrict__ x_ptr;

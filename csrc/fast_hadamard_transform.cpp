@@ -52,7 +52,8 @@ void set_hadamard_params(HadamardParamsBase &params,
                          // device pointers
                          const at::Tensor x,
                          const at::Tensor out,
-                         float scale
+                         float scale,
+                         bool fast_low_precision=false
                          ) {
 
     // Reset the parameters
@@ -70,15 +71,36 @@ void set_hadamard_params(HadamardParamsBase &params,
     params.out_batch_stride = out.stride(0);
 
     params.scale = scale;
+    params.fast_low_precision = fast_low_precision;
 }
 
 
 at::Tensor
-fast_hadamard_transform(at::Tensor &x, float scale) {
+fast_hadamard_transform(at::Tensor &x, float scale, bool fast_low_precision=false) {
     auto input_type = x.scalar_type();
     TORCH_CHECK(input_type == at::ScalarType::Float || input_type == at::ScalarType::Half || input_type == at::ScalarType::BFloat16);
 
     TORCH_CHECK(x.is_cuda());
+
+    const int dim_fast = x.size(-1);
+    if (x.dim() == 2 && x.stride(1) == 1 && dim_fast % 8 == 0 && dim_fast <= 32768) {
+        const int batch_size = x.size(0);
+        at::Tensor out = torch::empty_like(x);
+
+        HadamardParamsBase params;
+        set_hadamard_params(params, batch_size, dim_fast, 1, x, out, scale, fast_low_precision);
+
+#if TORCH_VERSION_MAJOR > 2 || (TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR >= 6)
+        c10::DeviceGuard device_guard(x.device());
+#else
+        at::cuda::CUDAGuard device_guard{x.device()};
+#endif
+        auto stream = at::cuda::getCurrentCUDAStream().stream();
+        DISPATCH_ITYPE_FLOAT_AND_HALF_AND_BF16(x.scalar_type(), "fast_hadamard_transform", [&] {
+            fast_hadamard_transform_cuda<input_t>(params, stream);
+        });
+        return out;
+    }
 
     const auto shapes_og = x.sizes();
     const int dim_og = x.size(-1);
@@ -101,7 +123,7 @@ fast_hadamard_transform(at::Tensor &x, float scale) {
     at::Tensor out = torch::empty_like(x);
 
     HadamardParamsBase params;
-    set_hadamard_params(params, batch_size, dim, 1, x, out, scale);
+    set_hadamard_params(params, batch_size, dim, 1, x, out, scale, fast_low_precision);
 
     // Otherwise the kernel will be launched from cuda:0 device
     // Cast to char to avoid compiler warning about narrowing
@@ -309,7 +331,8 @@ fast_hadamard_transform_40N(at::Tensor &x, float scale) {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("fast_hadamard_transform", &fast_hadamard_transform, "Fast Hadamard transform");
+    m.def("fast_hadamard_transform", &fast_hadamard_transform, "Fast Hadamard transform",
+          pybind11::arg("x"), pybind11::arg("scale")=1.0f, pybind11::arg("fast_low_precision")=false);
     m.def("fast_hadamard_transform_12N", &fast_hadamard_transform_12N, "Fast Hadamard transform with dimension = 12 * power of 2");
     m.def("fast_hadamard_transform_20N", &fast_hadamard_transform_20N, "Fast Hadamard transform with dimension = 20 * power of 2");
     m.def("fast_hadamard_transform_28N", &fast_hadamard_transform_28N, "Fast Hadamard transform with dimension = 28 * power of 2");

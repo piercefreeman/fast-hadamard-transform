@@ -1,0 +1,82 @@
+{
+  "metadata": {
+    "timestamp_utc": "2026-05-28T05:55:40.832228+00:00",
+    "platform": "Linux-6.8.0-83-generic-x86_64-with-glibc2.35",
+    "python": "3.11.10 (main, Sep  7 2024, 18:35:41) [GCC 11.4.0]",
+    "torch": "2.4.1+cu124",
+    "torch_cuda": "12.4",
+    "cuda_available": true,
+    "gpu_name": "NVIDIA H200",
+    "gpu_capability": [
+      9,
+      0
+    ],
+    "gpu_count": 1,
+    "git_commit": "e7706faf8d1c3b9f241e36860640ad1dac644ede",
+    "git_status_short": "?? EXPERIMENTS.md\n?? benchmarks/__pycache__/\n?? benchmarks/rigorous_benchmark.py\n?? fast_hadamard_transform/__pycache__/\n?? fast_hadamard_transform_cuda.cpython-311-x86_64-linux-gnu.so",
+    "command": "benchmarks/rigorous_benchmark.py --dims 256 --dtypes fp16 --warmup 2 --repeats 3 --output benchmark_results/smoke.json --check-correctness"
+  },
+  "config": {
+    "dims": "256",
+    "dtypes": "fp16",
+    "warmup": 2,
+    "repeats": 3,
+    "seed": 0,
+    "target_mib": 256,
+    "min_rows": 1024,
+    "max_rows": 65536,
+    "align_rows": 128,
+    "output": "benchmark_results/smoke.json",
+    "check_correctness": true
+  },
+  "results": [
+    {
+      "median_us": 55.424001067876816,
+      "mean_us": 56.56533439954122,
+      "min_us": 54.368000477552414,
+      "max_us": 59.90400165319443,
+      "p10_us": 54.579200595617294,
+      "p90_us": 59.008001536130905,
+      "iqr_us": 2.7680005878210068,
+      "name": "hadamard_transform",
+      "dtype": "fp16",
+      "dim": 256,
+      "rows": 65536,
+      "input_mib": 32.0,
+      "bytes_moved": 67108864,
+      "effective_gbps": 1210.826766508844,
+      "peak_allocated_mib": 64.015625,
+      "correctness_max_abs_vs_fp32": 0.0009703636169433594,
+      "times_us": [
+        59.90400165319443,
+        55.424001067876816,
+        54.368000477552414
+      ],
+      "ratio_to_clone": 2.186868792285074
+    },
+    {
+      "median_us": 25.34399926662445,
+      "mean_us": 25.621333469947178,
+      "min_us": 24.73600022494793,
+      "max_us": 26.784000918269157,
+      "p10_us": 24.857600033283234,
+      "p90_us": 26.496000587940216,
+      "iqr_us": 1.024000346660614,
+      "name": "torch.clone",
+      "dtype": "fp16",
+      "dim": 256,
+      "rows": 65536,
+      "input_mib": 32.0,
+      "bytes_moved": 67108864,
+      "effective_gbps": 2647.9192685416374,
+      "peak_allocated_mib": 64.015625,
+      "correctness_max_abs_vs_fp32": null,
+      "times_us": [
+        26.784000918269157,
+        24.73600022494793,
+        25.34399926662445
+      ],
+      "ratio_to_clone": 1.0
+    }
+  ]
+}

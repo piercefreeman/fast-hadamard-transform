@@ -45,3 +45,19 @@ def test_fast_hadamard_transform(dim, dtype):
     print(f"dx max diff: {(x.grad - x_ref.grad).abs().max().item()}")
     print(f"dx Pytorch max diff: {(x_pt.grad - x_ref.grad).abs().max().item()}")
     assert (x.grad - x_ref.grad).abs().max().item() < 2 * (x_pt.grad - x_ref.grad).abs().max() + atol
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("dim", [1024, 4096])
+def test_fast_low_precision_flag(dim, dtype):
+    device = "cuda"
+    atol = 1e-2 if dtype == torch.float16 else 5e-2
+    torch.random.manual_seed(0)
+    x = torch.randn(8, dim, device=device, dtype=dtype)
+    scale = 1 / math.sqrt(dim)
+
+    out = hadamard_transform(x, scale=scale, fast_low_precision=True)
+    out_ref = hadamard_transform_ref(x.float(), scale=scale)
+
+    assert out.dtype == dtype
+    assert (out.float() - out_ref).abs().max().item() < atol
