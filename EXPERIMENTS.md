@@ -1875,3 +1875,18 @@ Result:
 - bf16 dim 4096 was only noise-scale at 231.296 us versus 231.024 us accepted.
 - fp32 guardrails were normal because they did not use the specialized helper.
 - Decision: reject and keep the generic templated exchange helper.
+
+## Experiment 133: Bootstrap Benchmark Artifact Comparator
+
+Hypothesis: recent precision-preserving kernel changes are often below 1% and can look positive in targeted runs while losing in full-suite repeats. A small artifact-comparison utility with bootstrap intervals over raw CUDA event timings will make acceptance and rejection decisions more rigorous without changing package behavior.
+
+Change:
+- Added `benchmarks/compare_benchmark_artifacts.py`.
+- The script compares two `rigorous_benchmark.py` JSON artifacts by common dtype/dim cases, reports geometric-mean speedups, dtype speedups, weakest cases, and optional bootstrap confidence intervals from the persisted `times_us` samples.
+
+Result:
+- Baseline comparison artifact: `benchmark_results/compare_exp126_vs_baseline_bootstrap_h200_20260528.json`.
+- Exp126 versus original baseline: 1.287149x geometric speedup; bootstrap median 1.286968x with p05/p95 1.286235x/1.287566x.
+- Rejection audit artifact: `benchmark_results/compare_exp127_vs_exp126_bootstrap_h200_20260528.json`.
+- Exp127 versus Exp126: 0.998359x geometric speedup; bootstrap p95 was 0.999151x, confirming the rejected full-suite candidate did not beat accepted Exp126 despite its isolated bf16 8192 cell win.
+- Decision: accept the comparator as part of the benchmark protocol for future narrow-route decisions.
