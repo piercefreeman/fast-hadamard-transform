@@ -1637,3 +1637,17 @@ Result:
 - fp16 dim 8192 regressed to 242.640 us and bf16 dim 8192 regressed to 237.952 us.
 - Neighboring dims and fp32 guardrails were normal.
 - Decision: reject and keep dim 8192 on the accepted single-buffer route.
+
+## Experiment 117: bf16 Vectorized Read-Only Load Retest
+
+Hypothesis: Experiment 102 showed a bf16 dim 16384 improvement from read-only vector loads, but that broad test also changed fp16. Retesting only the bf16 vectorized load path under the current pre-scale route may isolate a useful load-path win.
+
+Change:
+- Temporarily changed only `FloatIntermediateIO<..., at::BFloat16>` vectorized main-kernel loads to use `__ldg`.
+- This affects default bf16 dims 4096 and 16384, while bf16 8192 and 32768 stay on their guarded/specialized routes.
+
+Result:
+- Artifact: `benchmark_results/exp117_bf16_vector_load_ldg_current_h200_20260528.json`.
+- bf16 dim 16384 regressed to 243.744 us versus the accepted 242.112 us full-sweep value.
+- bf16 dim 4096 was only noise-scale better at 231.072 us.
+- Decision: reject and keep the normal vectorized bf16 load path outside the specialized 32768 route.
