@@ -1598,3 +1598,16 @@ Result:
 - Full default precision-preserving speedup improved from 1.2812x to 1.2844x versus the original baseline.
 - Precision check: for dim 16384, PyTorch reference post-scale and pre-scale forms were bitwise identical after bf16 rounding; kernel max abs versus the fp32 reference stayed in the established bf16 range.
 - Decision: accept as a narrow precision-preserving scale-placement win.
+
+## Experiment 114: fp32 Exact-Power Pre-Scale
+
+Hypothesis: the exact-power pre-scale trick accepted for bf16 dim 16384 may also help fp32 dimensions 4096 and 16384, where the benchmark normalization scale is exactly representable.
+
+Change:
+- Temporarily routed fp32 dim 4096 with scale `1/64` and fp32 dim 16384 with scale `1/128` through the pre-scale main-kernel instantiation.
+
+Result:
+- Artifact: `benchmark_results/exp114_fp32_4096_16384_prescale_h200_20260528.json`.
+- fp32 dim 4096 regressed to 147.024 us and fp32 dim 16384 regressed to 158.672 us.
+- fp16/bf16 guardrails were normal.
+- Decision: reject and keep fp32 on the accepted post-scale route.
