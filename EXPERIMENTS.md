@@ -1554,3 +1554,17 @@ Result:
 - The new layout regressed every targeted 16-bit case: fp16 dim 4096 measured 303.920 us, fp16 dim 8192 272.080 us, and bf16 dim 16384 281.728 us.
 - fp32 guardrails were unaffected because they did not use the experimental route.
 - Decision: reject and restore the standard 256-thread, 8-element launch shape.
+
+## Experiment 111: 512-Thread 4-Element 16-Bit Launch Shape
+
+Hypothesis: the 1024-thread 4-element shape may have been too wide, but a 512-thread 4-element shape could still reduce per-thread work versus the accepted 256-thread 8-element route without excessive warp count.
+
+Change:
+- Temporarily routed default fp16/bf16 dims 4096, 8192, and 16384 through 512-thread, 4-element launches.
+- Kept the existing 4096 double-buffered exchange behavior in the experimental route.
+
+Result:
+- Artifact: `benchmark_results/exp111_16bit_512t_4elts_4096_16384_h200_20260528.json`.
+- The intermediate shape was still slower than accepted: fp16 dim 4096 measured 250.384 us, fp16 dim 8192 257.104 us, and bf16 dim 16384 289.696 us.
+- fp32 guardrails were unaffected.
+- Decision: reject and restore the standard 256-thread, 8-element launch shape.
