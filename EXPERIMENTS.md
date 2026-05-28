@@ -1472,3 +1472,16 @@ Result:
 - bf16 dim 32768 improved from 331.024 us in the accepted Experiment 092 full artifact to 326.048 us in the full Exp104 sweep.
 - Full default precision-preserving speedup improved from 1.2789x to 1.2812x versus the original baseline.
 - Decision: accept as a narrow precision-preserving codegen/load-path win.
+
+## Experiment 105: Exact Read-Only Load for bf16 32768
+
+Hypothesis: the accepted bf16 dim 32768 read-only load route is only used for exact `params.dim == 32768`, so removing the remaining boundary check may improve codegen without changing precision.
+
+Change:
+- Temporarily replaced the guarded bf16 `__ldg` load helper in the specialized restrict kernel with an exact helper that skips the boundary check and zero initialization.
+
+Result:
+- Artifact: `benchmark_results/exp105_bf16_32768_exact_ldg_load_h200_20260528.json`.
+- bf16 dim 32768 measured 325.856 us versus 326.064 us in the Exp104 targeted run, which is inside the run's 4.832 us IQR and not a meaningful improvement.
+- fp16 and fp32 guardrails were normal.
+- Decision: reject and keep the accepted guarded `__ldg` helper from Experiment 104.
