@@ -1845,3 +1845,18 @@ Result:
 - The targeted run showed only noise-scale gains: fp32 dim 1024 was 134.576 us and dim 2048 was 136.496 us.
 - The full sweep regressed to 1.2855x over baseline versus 1.2871x in the accepted Exp126 repeat artifact.
 - Decision: reject and keep the transpose-based chunk stage.
+
+## Experiment 131: 16-Bit 4096 Exact-Power Pre-Scale Retest
+
+Hypothesis: dim 4096 is one of the weakest remaining 16-bit cells, and the benchmark scale is exactly `1/64`. Applying the scale before the float Hadamard and storing with scale 1 may preserve output rounding while moving multiply work away from the output conversion path. This retests the earlier neutral 4096 pre-scale signal under the current grid-constant codegen.
+
+Change:
+- Temporarily routed default fp16 and bf16 dim 4096 through the existing `kPreScale` main-kernel instantiation when `params.scale == 0.015625f`.
+- Kept the accepted double-buffered post-exchange route.
+
+Result:
+- Artifact: `benchmark_results/exp131_16bit_4096_prescale_current_h200_20260528.json`.
+- fp16 dim 4096 regressed to 232.176 us versus 231.920 us in the accepted Exp126 repeat artifact.
+- bf16 dim 4096 regressed to 232.112 us versus 231.024 us in the accepted Exp126 repeat artifact.
+- Guardrails were normal.
+- Decision: reject and keep fp16/bf16 dim 4096 on the accepted post-scale double-buffered route.
