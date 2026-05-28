@@ -2171,3 +2171,25 @@ Result:
 - fp32 guardrails were normal: fp32 dim 8192 143.008 us and fp32 dim 16384 149.824 us.
 - Precision note: this experiment preserved float intermediates and standard fp16/bf16 output conversion. It changed only the on-chip vector/chunk layout and exact I/O packing width for the tested 16-bit main-kernel routes.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
+
+## Experiment 149: 16-Bit 8192/16384 Wide Float Shared-Memory Exchange
+
+Hypothesis: default fp16/bf16 dims 8192 and 16384 still spend a large fraction of time in the float register-exchange path. Storing and loading the full eight-float exchange vector as a single 32-byte shared-memory chunk could reduce shared-memory instruction overhead while preserving the same float intermediates and standard fp16/bf16 output conversion.
+
+Change:
+- Temporarily added a wide eight-float shared-memory exchange helper.
+- Routed default fp16/bf16 dims 8192 and 16384 through the wide exchange path.
+- Preserved the existing grid-constant wrapper for fp16 dim 8192 and the accepted guarded bf16 dim 16384 pre-scale route.
+- Left fp32 and `fast_low_precision=True` native half2/bfloat162 routes unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp149_16bit_8192_16384_wide_float_exchange_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- ptxas showed no spills and unchanged register counts for the routed fp16 kernels, but runtime performance was much worse.
+- fp16 dim 8192 regressed to 292.992 us versus 231.328 us in the accepted Exp139 repeat2 artifact.
+- fp16 dim 16384 regressed to 305.408 us versus 245.792 us.
+- bf16 dim 8192 regressed to 293.008 us versus 235.840 us.
+- bf16 dim 16384 regressed to 294.336 us versus 233.840 us.
+- fp32 guardrails stayed normal enough for this targeted test: fp32 dim 8192 142.976 us and fp32 dim 16384 150.352 us.
+- Precision note: this experiment preserved float intermediates and standard fp16/bf16 output conversion. It changed only the shared-memory exchange packing for the tested 16-bit main-kernel routes.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
