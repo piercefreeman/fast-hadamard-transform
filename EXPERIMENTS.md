@@ -2058,3 +2058,22 @@ Result:
 - fp32 guardrails were normal: fp32 dim 8192 142.768 us and fp32 dim 16384 149.744 us.
 - Precision note: this experiment preserved float intermediates and standard fp16/bf16 output conversion; it only changed launch shape for exact dimensions.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
+
+## Experiment 143: fp16 32768 Restricted Exact Specialized Kernel
+
+Hypothesis: the accepted fp16 dim 32768 exact-I/O route still uses the generic float-intermediate body. A dedicated exact fp16 32768 kernel with restricted row pointers and inline exact vector I/O may give ptxas better aliasing information than Experiment 094 while preserving the same arithmetic, scaling, and fp16 output conversion.
+
+Change:
+- Temporarily added a specialized default fp16 dim 32768 kernel.
+- Kept 1024 threads, the 128 KiB float exchange tile, float Hadamard arithmetic, the accepted initial pre-exchange sync skip, and exact fp16 load/store conversion.
+- Marked the row input and output pointers as `__restrict__` inside the specialized kernel.
+- Left bf16, fp32, and `fast_low_precision=True` native half2/bfloat162 routes unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp143_fp16_32768_restrict_specialized_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- ptxas reported 64 registers and no spills for the specialized fp16 32768 kernel, matching the accepted generic exact route's register count.
+- fp16 dim 32768 measured 306.912 us versus 306.816 us in the accepted Exp139 repeat2 artifact, so the change was neutral to slightly slower.
+- bf16 and fp32 guardrails stayed normal: bf16 dim 32768 326.112 us and fp32 dim 32768 194.336 us.
+- Precision note: this experiment preserved float intermediates and standard fp16 output conversion; the only semantic-facing change was aliasing/codegen information in an exact-dimension kernel.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
