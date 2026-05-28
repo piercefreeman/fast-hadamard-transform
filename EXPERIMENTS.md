@@ -1310,3 +1310,28 @@ Result:
 - bf16 dim 32768 improved from 342.304 us in the accepted Experiment 081 repeat to 334.896 us targeted and 331.024 us in the full sweep.
 - Full default geometric speedup remained effectively unchanged because this affects one case: 1.279x versus 1.279x before, still far short of 1.5x.
 - Decision: accept as a narrow precision-preserving compounding win.
+
+## Experiment 093: bf16 32768 Restrict Route Sync Skip
+
+Hypothesis: after specializing bf16 dim 32768 with restricted row pointers, the earlier pre-exchange sync-skip rejection may change because ptxas emits a different kernel. Skipping the initial pre-exchange barrier remains synchronization-only and should not affect arithmetic precision.
+
+Change:
+- Temporarily skipped the initial pre-exchange barrier inside the specialized default bf16 dim 32768 restrict kernel.
+
+Result:
+- Artifact: `benchmark_results/exp093_bf16_32768_restrict_sync_skip_h200_20260528.json`.
+- bf16 dim 32768 regressed to 344.928 us. fp16 and fp32 guardrails were unaffected because they do not use the specialized route.
+- Decision: reject and keep the initial pre-exchange barrier in the specialized bf16 dim 32768 route.
+
+## Experiment 094: fp16 32768 Exact Specialized Kernel
+
+Hypothesis: the accepted fp16 dim 32768 exact-I/O route still goes through the generic main-kernel body. A dedicated exact fp16 dim 32768 kernel may remove compile-time branches and give ptxas the same scheduling freedom that helped the bf16 32768 restrict route.
+
+Change:
+- Temporarily added a specialized default fp16 dim 32768 exact-I/O kernel.
+- Kept float Hadamard arithmetic, exact fp16 boundary conversion, 1024-thread launch shape, 128 KiB exchange tile, and existing synchronization behavior.
+
+Result:
+- Artifact: `benchmark_results/exp094_fp16_32768_exact_specialized_h200_20260528.json`.
+- fp16 dim 32768 was neutral to slower at 307.120 us. bf16 and fp32 guardrails stayed near expected ranges.
+- Decision: reject and keep the generic exact-I/O route for fp16 dim 32768.
