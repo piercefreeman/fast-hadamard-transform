@@ -2213,3 +2213,23 @@ Result:
 - fp32 dim 32768 regressed to 283.312 us versus 194.672 us.
 - Precision note: this experiment preserved fp32 arithmetic and fp32 output storage. The regression is from the on-chip layout/codegen tradeoff, not from any lower-precision math.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
+
+## Experiment 151: fp32 8192/16384/32768 Two-Min-Block Launch Bounds
+
+Hypothesis: fp32 remains the weakest dtype by geometric speedup, and the accepted large fp32 routes may be scheduling/occupancy constrained rather than arithmetic-layout constrained. Requesting two resident blocks per SM for fp32 dims 8192, 16384, and 32768 could improve scheduling while preserving fp32 arithmetic and output precision.
+
+Change:
+- Temporarily added a `__launch_bounds__(Ktraits::kNThreads, 2)` main-kernel wrapper.
+- Routed fp32 dims 8192, 16384, and 32768 through the two-min-block wrapper.
+- Preserved the accepted conditional-warp route for fp32 dim 16384 and grid-constant parameter placement for fp32 dim 32768.
+- Left fp16, bf16, and `fast_low_precision=True` native half2/bfloat162 routes unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp151_fp32_8192_32768_min_blocks2_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- ptxas showed the fp32 dim 32768 min-blocks2 grid-constant kernel spilled heavily: 812 bytes spill stores and 812 bytes spill loads. The 8192 and 16384 variants were spill-free but used more registers than the accepted routes.
+- fp32 dim 8192 regressed to 144.528 us versus 143.008 us in the accepted Exp139 repeat2 artifact.
+- fp32 dim 16384 regressed to 168.672 us versus 149.632 us.
+- fp32 dim 32768 regressed to 330.640 us versus 194.672 us.
+- Precision note: this experiment preserved fp32 arithmetic and fp32 output storage. The regression is from occupancy/register-pressure tradeoffs, especially spills at dim 32768, not from any precision change.
+- Decision: reject and restore the accepted Exp139 source. The accepted source was rebuilt after restore and `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py` passed with 55 tests. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
