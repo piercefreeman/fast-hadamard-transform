@@ -2099,3 +2099,20 @@ Result:
 - Dtype speedups versus accepted Exp139 repeat2 were bf16 1.000877x, fp16 0.999467x, and fp32 1.000286x.
 - Precision note: this experiment preserved float intermediates and standard bf16 output conversion. It only changed the launch wrapper for one exact dimension and did not use native bfloat162 arithmetic on the default path.
 - Decision: reject and restore the accepted Exp139 source. The isolated bf16 dim 8192 improvement repeated, but the full-suite effect was only noise-level and the bootstrap interval versus accepted Exp139 crossed 1.0. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
+
+## Experiment 145: bf16 16384 Exact I/O With Pre-Scale
+
+Hypothesis: the accepted bf16 dim 16384 pre-scale route still uses the guarded vectorized bf16 load/store path. Exact bf16 main-kernel I/O for the exact 16384 case could remove boundary checks and zero-fill work while preserving float intermediates, the accepted pre-scale condition, and standard bf16 output rounding.
+
+Change:
+- Temporarily added exact bf16 main-kernel load/store helpers.
+- Routed only default bf16 dim 16384 with `params.scale == 0.0078125f` through exact bf16 I/O on the accepted grid-constant pre-scale route.
+- Left fp16, fp32, other bf16 dimensions, and `fast_low_precision=True` native bfloat162 routes unchanged.
+
+Result:
+- Artifact: `benchmark_results/exp145_bf16_16384_exact_prescale_io_h200_20260528.json`.
+- Correctness was enabled in the targeted benchmark.
+- bf16 dim 16384 regressed badly to 257.024 us versus 233.840 us in the accepted Exp139 repeat2 artifact.
+- Neighboring guardrails were normal: bf16 dim 8192 235.696 us, bf16 dim 32768 326.128 us, fp16 dim 32768 306.752 us, fp32 dim 16384 148.864 us, and fp32 dim 32768 194.432 us.
+- Precision note: this experiment would have preserved float intermediates and standard bf16 output conversion; it only removed exact-dimension I/O guards in the already-accepted pre-scale route. The regression is a codegen/performance issue, not a precision tradeoff.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
