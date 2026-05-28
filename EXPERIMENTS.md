@@ -1665,3 +1665,17 @@ Result:
 - fp32 dim 8192 measured 141.728 us, slower than the accepted full-sweep value of 141.376 us.
 - fp16 dim 4096 measured 231.664 us, a noise-scale movement relative to the accepted 231.776 us.
 - Decision: reject and keep the transpose-based chunk stage.
+
+## Experiment 119: fp32 Large Launch-Width Retest
+
+Hypothesis: after direct fp32 I/O and selective conditional add/sub, fp32 dim 8192 or 16384 may respond differently to launch-width changes that were rejected earlier.
+
+Change:
+- Temporarily routed fp32 dim 8192 through 128 threads.
+- Temporarily routed fp32 dim 16384 through 512 threads while keeping conditional add/sub.
+
+Result:
+- Artifact: `benchmark_results/exp119_fp32_8192_128t_16384_512t_h200_20260528.json`.
+- fp32 dim 8192 regressed to 159.872 us and fp32 dim 16384 regressed to 161.824 us.
+- fp16/bf16 guardrails were normal.
+- Decision: reject and keep the accepted fp32 launch widths.
