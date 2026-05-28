@@ -505,6 +505,24 @@ inline __device__ void store_output_bfloat16_warp_exact(
     }
 }
 
+template<int kNChunks, int kNElts>
+inline __device__ void load_input_bfloat16_ldg(at::BFloat16 *x, float x_vals[kNChunks][kNElts], int dim) {
+    using vec_t = typename BytesToType<sizeof(at::BFloat16) * kNElts>::Type;
+    at::BFloat16 x_vals_load[kNChunks][kNElts] = {0};
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        if ((c * blockDim.x + threadIdx.x) * kNElts < dim) {
+            reinterpret_cast<vec_t*>(x_vals_load)[c] =
+                __ldg(reinterpret_cast<const vec_t*>(x) + c * blockDim.x + threadIdx.x);
+        }
+    }
+    #pragma unroll
+    for (int c = 0; c < kNChunks; ++c) {
+        #pragma unroll
+        for (int i = 0; i < kNElts; ++i) { x_vals[c][i] = float(x_vals_load[c][i]); }
+    }
+}
+
 template<typename Ktraits, bool kUseConditionalWarp = false, bool kUseDoubleBufferExchange = false,
          bool kUseExactHalfIO = false>
 __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardParamsBase params, char *smem_) {
@@ -647,7 +665,7 @@ void fast_hadamard_transform_bfloat16_32768_restrict_kernel(HadamardParamsBase p
     input_t *__restrict__ out = reinterpret_cast<input_t *>(params.out_ptr) + batch_id * params.out_batch_stride;
 
     float x_vals[kNChunks][kNElts];
-    load_input<kNChunks, kNElts, input_t>(x, x_vals, params.dim);
+    load_input_bfloat16_ldg<kNChunks, kNElts>(x, x_vals, params.dim);
 
     hadamard_mult_thread<3, kNChunks>(x_vals);
     hadamard_mult_warp_conditional<5, 0, kNChunks, kNElts>(x_vals);

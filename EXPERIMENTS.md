@@ -1387,3 +1387,88 @@ Result:
 - fp16 dim 8192 was neutral/slightly worse at 237.696 us and fp16 dim 16384 was only noise-scale better at 245.840 us.
 - Guardrails drifted worse in the same targeted run.
 - Decision: reject and restore the generic non-restrict routes.
+
+## Experiment 099: NVCC Extra Device Vectorization
+
+Hypothesis: enabling NVCC's extra device vectorization pass may improve instruction selection across the default precision-preserving kernels, including fp32, without changing arithmetic precision.
+
+Change:
+- Temporarily added `--extra-device-vectorization` to the CUDA compile flags.
+- Rebuilt the extension and ran the full default benchmark suite with correctness checks.
+
+Result:
+- Artifact: `benchmark_results/exp099_extra_device_vectorization_full_h200_20260528.json`.
+- Full-suite geometric speedup versus the original baseline regressed from 1.2789x in the accepted Experiment 092 artifact to 1.2741x.
+- The experiment was mostly neutral but regressed visible cases including fp16 dim 512 (40.384 us to 42.368 us) and bf16 dim 32768 (331.024 us to 333.312 us).
+- Decision: reject and restore the prior CUDA compile flags.
+
+## Experiment 100: One-Warp Launch Bounds With Minimum Blocks
+
+Hypothesis: the grouped one-warp default kernels for dimensions 256 through 2048 may be limited by resident blocks or register allocation. Adding `__launch_bounds__(threads, 2)` could improve occupancy without changing float-intermediate arithmetic.
+
+Change:
+- Temporarily changed the generic precision-preserving one-warp kernel launch bounds to request at least two resident blocks per SM.
+- Benchmarked dimensions 256, 512, 1024, and 2048 for fp16, bf16, and fp32.
+
+Result:
+- Artifact: `benchmark_results/exp100_one_warp_launch_bounds2_h200_20260528.json`.
+- fp16 dim 2048 regressed from 134.896 us to 177.872 us and bf16 dim 2048 regressed from 134.912 us to 181.696 us.
+- fp16/bf16 dim 1024 also regressed to about 77 us, while fp32 was only neutral.
+- Decision: reject and restore the original one-warp launch bounds.
+
+## Experiment 101: fp32 32768 Exact I/O Route
+
+Hypothesis: the current fp32 dim 32768 route avoids the direct fp32 I/O specialization because the broad direct path regressed that case. A runtime exact-dimension guard may remove boundary checks for the power-of-two case without harming padded inputs.
+
+Change:
+- Temporarily added exact fp32 load/store helpers for `kNElts == 4`.
+- Routed only `params.dim == 32768` fp32 through the exact I/O instantiation.
+
+Result:
+- Artifact: `benchmark_results/exp101_fp32_32768_exact_io_h200_20260528.json`.
+- fp32 dim 32768 regressed sharply to 221.280 us versus about 196 us in the accepted artifact.
+- fp32 dim 8192 and 16384 guardrails were also slightly slower in the same run.
+- Decision: reject and keep the generic fp32 dim 32768 I/O path.
+
+## Experiment 102: Read-Only Loads for Vectorized 16-Bit I/O
+
+Hypothesis: the vectorized fp16/bf16 float-intermediate input paths may benefit from read-only cache loads via `__ldg` while preserving the same float arithmetic and output conversion.
+
+Change:
+- Temporarily changed vectorized fp16 and bf16 main-kernel input loads to use `__ldg`.
+- Benchmarked dimensions 4096 through 32768 for fp16, bf16, and fp32.
+
+Result:
+- Artifact: `benchmark_results/exp102_16bit_vector_load_ldg_h200_20260528.json`.
+- Common-case geometric speed was 0.9994x versus the accepted Experiment 092 full artifact.
+- bf16 dim 16384 improved to 245.392 us and fp16 dim 8192 improved to 236.624 us, but fp16 dim 16384 regressed to 248.416 us and fp16 dim 4096 also moved slower.
+- Decision: reject the broad vectorized-load `__ldg` route.
+
+## Experiment 103: Read-Only Loads for Generic I/O
+
+Hypothesis: the generic guarded load helper feeds fp32 dim 32768 and the specialized bf16 dim 32768 restrict route. Using `__ldg` there may improve large read-only input loads while preserving arithmetic precision.
+
+Change:
+- Temporarily changed the generic block and one-warp load helpers to use `__ldg`.
+- Benchmarked selected medium and large dimensions for all dtypes.
+
+Result:
+- Artifact: `benchmark_results/exp103_generic_load_ldg_h200_20260528.json`.
+- bf16 dim 32768 improved materially to 324.880 us, but fp32 dim 32768 regressed sharply to 238.880 us.
+- Other cases were mostly neutral or noise-scale, with bf16 dim 8192 also slower.
+- Decision: reject the broad generic-load route and isolate the bf16 dim 32768 signal.
+
+## Experiment 104: bf16 32768 Restrict Route Read-Only Load
+
+Hypothesis: the useful part of Experiment 103 is specific to the specialized bf16 dim 32768 restrict kernel. Applying `__ldg` only there may keep the bf16 win without the fp32 32768 regression.
+
+Change:
+- Added a bf16 `__ldg` load helper that preserves the generic bf16-to-float conversion path.
+- Used it only in the specialized default bf16 dim 32768 restrict kernel.
+
+Result:
+- Targeted artifact: `benchmark_results/exp104_bf16_32768_restrict_ldg_h200_20260528.json`.
+- Full default artifact: `benchmark_results/current_default_precision_exp104_bf16_32768_ldg_full_h200_20260528.json`.
+- bf16 dim 32768 improved from 331.024 us in the accepted Experiment 092 full artifact to 326.048 us in the full Exp104 sweep.
+- Full default precision-preserving speedup improved from 1.2789x to 1.2812x versus the original baseline.
+- Decision: accept as a narrow precision-preserving codegen/load-path win.
