@@ -2077,3 +2077,25 @@ Result:
 - bf16 and fp32 guardrails stayed normal: bf16 dim 32768 326.112 us and fp32 dim 32768 194.336 us.
 - Precision note: this experiment preserved float intermediates and standard fp16 output conversion; the only semantic-facing change was aliasing/codegen information in an exact-dimension kernel.
 - Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
+
+## Experiment 144: bf16 8192 Grid-Constant Retest
+
+Hypothesis: Experiment 127 showed an isolated positive signal for default bf16 dim 8192 through the existing grid-constant wrapper, but the full-suite result did not beat the then-accepted source. Retesting that single dispatch change under the accepted Exp139 codegen could recover a small precision-preserving win.
+
+Change:
+- Temporarily routed only default bf16 dim 8192 through `fast_hadamard_transform_grid_constant_launch<256, 13, input_t>`.
+- Left fp16, fp32, other bf16 dimensions, and `fast_low_precision=True` native bfloat162 routes unchanged.
+
+Result:
+- Targeted artifacts:
+  - `benchmark_results/exp144_bf16_8192_grid_constant_h200_20260528.json`.
+  - `benchmark_results/exp144_bf16_8192_grid_constant_h200_20260528_repeat2.json`.
+- The targeted bf16 dim 8192 cell improved on both focused repeats: 234.160 us and 233.760 us versus 235.840 us in the accepted Exp139 repeat2 artifact.
+- Full artifact: `benchmark_results/exp144_bf16_8192_grid_constant_full_h200_20260528.json`.
+- Full-suite bf16 dim 8192 measured 233.440 us, a 1.010281x cell speedup versus accepted Exp139 repeat2.
+- Bootstrap comparison artifacts:
+  - `benchmark_results/compare_exp144_vs_exp139_repeat2_bootstrap_h200_20260528.json`: 1.000210x geometric speedup versus accepted Exp139 repeat2, bootstrap median 1.000300x with p05/p95 0.999633x/1.000973x.
+  - `benchmark_results/compare_exp144_vs_baseline_bootstrap_h200_20260528.json`: 1.319120x geometric speedup versus the original baseline, bootstrap median 1.319158x with p05/p95 1.318402x/1.319953x.
+- Dtype speedups versus accepted Exp139 repeat2 were bf16 1.000877x, fp16 0.999467x, and fp32 1.000286x.
+- Precision note: this experiment preserved float intermediates and standard bf16 output conversion. It only changed the launch wrapper for one exact dimension and did not use native bfloat162 arithmetic on the default path.
+- Decision: reject and restore the accepted Exp139 source. The isolated bf16 dim 8192 improvement repeated, but the full-suite effect was only noise-level and the bootstrap interval versus accepted Exp139 crossed 1.0. The best default precision-preserving repeat remains 1.318843x over baseline, still about 13.74% short of the requested 1.5x target.
