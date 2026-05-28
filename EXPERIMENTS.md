@@ -1611,3 +1611,16 @@ Result:
 - fp32 dim 4096 regressed to 147.024 us and fp32 dim 16384 regressed to 158.672 us.
 - fp16/bf16 guardrails were normal.
 - Decision: reject and keep fp32 on the accepted post-scale route.
+
+## Experiment 115: bf16 16384 Pre-Scale With Conditional Add/Sub
+
+Hypothesis: the newly accepted bf16 dim 16384 pre-scale route changes codegen enough that the previously rejected conditional add/sub helper may become useful for that specific kernel.
+
+Change:
+- Temporarily changed only the guarded bf16 dim 16384 pre-scale route to use conditional add/sub warp Hadamard.
+
+Result:
+- Artifact: `benchmark_results/exp115_bf16_16384_prescale_conditional_h200_20260528.json`.
+- bf16 dim 16384 regressed to 246.208 us, losing the accepted pre-scale win.
+- fp16 and fp32 guardrails were normal because they do not use this route.
+- Decision: reject and keep the non-conditional pre-scale route.
