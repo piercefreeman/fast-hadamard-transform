@@ -1539,3 +1539,18 @@ Result:
 - The shifted mask was worse than the accepted swizzle: fp16 dim 4096 regressed to 262.240 us, fp16 dim 8192 to 268.736 us, and bf16 dim 32768 to 356.128 us.
 - fp32 large cases also regressed.
 - Decision: reject and restore the original `col ^ row` swizzle.
+
+## Experiment 110: 1024-Thread 4-Element 16-Bit Launch Shape
+
+Hypothesis: default fp16/bf16 dimensions 4096 through 16384 may be limited by per-thread register and instruction work. Using 1024 threads with 4 float intermediates per thread changes the on-chip tile shape while preserving float arithmetic and guarded I/O.
+
+Change:
+- Temporarily allowed the main kernel traits to override `kNElts`.
+- Routed default fp16/bf16 dims 4096, 8192, and 16384 through 1024-thread, 4-element launches.
+- Kept the existing 4096 double-buffered exchange behavior in the 1024-thread variant.
+
+Result:
+- Artifact: `benchmark_results/exp110_16bit_1024t_4elts_4096_16384_h200_20260528.json`.
+- The new layout regressed every targeted 16-bit case: fp16 dim 4096 measured 303.920 us, fp16 dim 8192 272.080 us, and bf16 dim 16384 281.728 us.
+- fp32 guardrails were unaffected because they did not use the experimental route.
+- Decision: reject and restore the standard 256-thread, 8-element launch shape.
