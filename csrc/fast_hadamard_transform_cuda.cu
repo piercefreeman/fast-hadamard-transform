@@ -32,7 +32,9 @@ struct fast_hadamard_transform_kernel_traits {
     // Large dimensions are exchange-bound on Hopper; use a larger tile where measured useful.
     static constexpr bool kUseLargeExchange =
         N == 16 * 1024 || N == 32 * 1024;
-    static constexpr int kSmemExchangeSize = std::min(N * 4, (kUseLargeExchange ? 64 : 32) * 1024);
+    static constexpr int kSmemExchangeKiB =
+        kNBytes == 2 && N == 32 * 1024 ? 128 : (kUseLargeExchange ? 64 : 32);
+    static constexpr int kSmemExchangeSize = std::min(N * 4, kSmemExchangeKiB * 1024);
     static constexpr int kNExchangeRounds = N * 4 / kSmemExchangeSize;
     static_assert(kNExchangeRounds * kSmemExchangeSize == N * 4);
     static constexpr int kSmemSize = kSmemExchangeSize;
@@ -1102,13 +1104,13 @@ void fast_hadamard_transform_cuda(HadamardParamsBase &params, cudaStream_t strea
             if (params.fast_low_precision) {
                 fast_hadamard_transform_half2_launch<512, 15>(params, stream);
             } else {
-                fast_hadamard_transform_launch<512, 15, input_t>(params, stream);
+                fast_hadamard_transform_launch<1024, 15, input_t>(params, stream);
             }
         } else if constexpr (std::is_same_v<input_t, at::BFloat16>) {
             if (params.fast_low_precision) {
                 fast_hadamard_transform_bfloat162_launch<512, 15>(params, stream);
             } else {
-                fast_hadamard_transform_launch<512, 15, input_t>(params, stream);
+                fast_hadamard_transform_launch<512, 15, input_t, true>(params, stream);
             }
         } else {
             fast_hadamard_transform_lowp_exchange_launch<1024, 15, input_t>(params, stream);

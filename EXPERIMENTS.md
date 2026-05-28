@@ -672,3 +672,82 @@ Result:
   - `benchmark_results/current_optimized_exp043_fast_lowp_flag_full_h200_20260528.json`: 101.343 us geometric mean, 1.496x over baseline.
   - `benchmark_results/current_optimized_exp043_fast_lowp_flag_full_h200_20260528_repeat2.json`: 101.298 us geometric mean, 1.496x over baseline.
 - Decision: accept the gate. The latest fast-flag speed runs are slightly below the previous 1.5x artifacts due to run-to-run movement, but the precision-risking arithmetic is now opt-in instead of default.
+
+## Current Default Precision Baseline After Experiment 043
+
+Result:
+- Full default precision-preserving artifact: `benchmark_results/current_default_precision_full_h200_20260528.json`.
+- Default geometric-mean median time: 121.634 us versus 151.586 us baseline.
+- Default speedup over baseline: 1.246x across 24 cases.
+- Dtype geometric-mean speedups: fp16 1.324x, bf16 1.313x, fp32 1.113x.
+- The gap to 1.5x is mostly the fp16/bf16 large dimensions after moving the native `half2`/`bfloat162` kernels behind the opt-in flag. Many fp32 cases are already close to `torch.clone`, so a per-case 1.5x target is below the measured output-materialization lower bound for those shapes.
+
+## Experiment 044: Precision-Preserving 32768 Launch Width
+
+Hypothesis: the default fp16/bf16 dim 32768 path may still benefit from the wider 1024-thread launch found earlier, because it reduces per-thread chunks while keeping float-intermediate arithmetic.
+
+Change:
+- Tested 1024-thread default float-intermediate launches for fp16 and bf16 dim 32768.
+- Split the route after the first measurement so only fp16 uses 1024 threads; bf16 returned to 512 threads.
+
+Result:
+- Broad artifact: `benchmark_results/exp044_default_lowp_32768_1024_threads_h200_20260528.json`.
+- Broad result: fp16 dim 32768 improved to 326.048 us, but bf16 regressed to 359.744 us.
+- Split artifact: `benchmark_results/exp044_default_lowp_32768_fp16_only_1024_threads_h200_20260528.json`.
+- Split result: fp16 dim 32768 measured 324.480 us; bf16 stayed near the prior route at 350.928 us.
+- Decision: accept 1024 threads only for default fp16 dim 32768. Reject the bf16 1024-thread route.
+
+## Experiment 045: 128 KiB Float Exchange Tile for 32768
+
+Hypothesis: dim 32768 still pays two shared-memory exchange rounds in the float-intermediate kernel. A 128 KiB exchange tile can reduce that to one round for 16-bit input while preserving float shared-memory storage.
+
+Change:
+- Temporarily enabled a 128 KiB main-kernel exchange tile for all dim 32768 dtypes.
+- Narrowed the change to `sizeof(input_t) == 2` after fp32 regressed.
+
+Result:
+- Artifact: `benchmark_results/exp045_default_32768_128k_exchange_h200_20260528.json`.
+- fp16 dim 32768 measured 323.584 us; bf16 measured 348.096 us.
+- fp32 dim 32768 regressed to 199.488 us versus about 196 us in adjacent runs.
+- Decision: accept the 128 KiB exchange tile only for 16-bit default dim 32768; keep fp32 on the prior 64 KiB tile.
+
+## Experiment 046: Broad Conditional Add/Sub for Large 16-Bit Defaults
+
+Hypothesis: replacing the sign-multiply form in warp Hadamard with branch-selected add/sub may reduce instruction work in the large default fp16/bf16 kernels without changing the intended float-intermediate arithmetic.
+
+Change:
+- Routed default fp16/bf16 dimensions 4096 through 32768 through the conditional add/sub warp helper.
+
+Result:
+- Artifact: `benchmark_results/exp046_default_lowp_large_conditional_addsub_h200_20260528.json`.
+- Mixed result: bf16 dim 32768 improved to 342.304 us, but fp16 dim 32768 regressed to 359.936 us and bf16 dim 16384 regressed to 262.144 us.
+- Decision: reject the broad route. Keep only the bf16 dim 32768 observation for a selective test.
+
+## Experiment 047: Selective Precision-Preserving 32768 Defaults
+
+Hypothesis: the useful default-path changes are specific to dim 32768: fp16 wants 1024 threads, bf16 wants conditional add/sub, and both 16-bit dtypes can use the 128 KiB float exchange tile.
+
+Change:
+- Kept fp16 dim 32768 on the 1024-thread float-intermediate launch.
+- Kept bf16 dim 32768 on the 512-thread float-intermediate launch with conditional add/sub.
+- Kept the 128 KiB exchange tile only for 16-bit dim 32768.
+
+Result:
+- Targeted artifact: `benchmark_results/exp047_default_selective_32768_precision_safe_h200_20260528.json`.
+- Targeted dim 32768 results: fp16 323.520 us, bf16 343.408 us, fp32 197.664 us.
+- Full-sweep artifacts:
+  - `benchmark_results/current_default_precision_exp047_full_h200_20260528.json`: 121.921 us geometric mean, 1.243x over baseline.
+  - `benchmark_results/current_default_precision_exp047_full_h200_20260528_repeat2.json`: 120.762 us geometric mean, 1.255x over baseline.
+- Decision: accept the selective 32768 default-path changes. They improve the affected large 16-bit cases without using native low-precision arithmetic, but the default precision-preserving path remains far short of 1.5x aggregate speedup.
+
+## Experiment 048: 16-Element Float-Exchange Shape for Large 16-Bit Defaults
+
+Hypothesis: a wider per-thread vector shape may reduce loop and transpose overhead in large fp16/bf16 kernels while preserving float arithmetic and float shared-memory exchange.
+
+Change:
+- Temporarily changed the main kernel's 16-bit `kNElts` from 8 to 16 for dimensions 4096 and larger.
+
+Result:
+- Artifact: `benchmark_results/exp048_default_large_16elts_float_exchange_h200_20260528.json`.
+- Regressed every targeted fp16/bf16 case. Examples: fp16 dim 4096 moved to 313.136 us and bf16 dim 32768 moved to 434.912 us.
+- Decision: reject and restore `kNElts = 8` for the default 16-bit float-intermediate kernel.
