@@ -2000,3 +2000,20 @@ Result:
 - Repeat2 dtype speedups versus the original baseline: fp16 1.437042x, bf16 1.422245x, fp32 1.122368x.
 - Precision note: the accepted path keeps float intermediates and standard fp16/bf16 output conversion. It removes exact-dimension I/O overhead only; it does not use native half2/bfloat162 arithmetic in the default path.
 - Decision: accept. This is a small repeatable improvement over Exp138, raising the best default precision-preserving repeat from 1.316053x to 1.318843x over baseline. The requested 1.5x default target remains unmet; from the repeat2 value, another roughly 13.74% speedup from here is still required.
+
+## Experiment 140: fp32 Exact I/O for Small Power-of-Two Routes
+
+Hypothesis: fp32 dimensions 256 through 4096 still carry runtime boundary checks even for exact power-of-two benchmark dimensions. Exact fp32 vector load/store helpers may remove guard overhead while preserving fp32 arithmetic and output scaling.
+
+Change:
+- Temporarily added exact fp32 block and one-warp load/store helpers.
+- First routed exact fp32 dims 256, 512, 1024, 2048, and 4096 through the exact-I/O instantiations.
+- After broad regressions, narrowed the temporary route to exact fp32 dims 512 and 1024 only.
+
+Result:
+- Broad artifact: `benchmark_results/exp140_fp32_small_exact_io_h200_20260528.json`.
+- Broad result: fp32 dim 512 had a small noise-scale improvement at 71.312 us, and fp32 dim 1024 was nearly neutral at 134.784 us. fp32 dim 2048 regressed to 138.272 us and fp32 dim 4096 regressed to 147.600 us versus the accepted Exp139 repeat2 values of 136.512 us and 141.904 us.
+- Narrow artifact: `benchmark_results/exp140_fp32_512_1024_exact_io_narrow_h200_20260528.json`.
+- Narrow result: fp32 dim 512 remained only noise-scale at 71.376 us, while fp32 dim 1024 regressed to 134.992 us versus 134.880 us in the accepted Exp139 repeat2 artifact. Guardrail fp32 dims 256 and 2048 were normal once their exact routes were removed.
+- Precision note: this would have preserved fp32 arithmetic, but the codegen/timing result was not useful enough to keep.
+- Decision: reject and restore the accepted Exp139 source. The best default precision-preserving repeat remains 1.318843x over baseline.
