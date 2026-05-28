@@ -1860,3 +1860,18 @@ Result:
 - bf16 dim 4096 regressed to 232.112 us versus 231.024 us in the accepted Exp126 repeat artifact.
 - Guardrails were normal.
 - Decision: reject and keep fp16/bf16 dim 4096 on the accepted post-scale double-buffered route.
+
+## Experiment 132: Specialized 4096 16-Bit Exchange Helper
+
+Hypothesis: fp16/bf16 dim 4096 always uses the same one-round exchange shape: 2 chunks, 8 values per chunk, 8 warps, and two 16-byte exchange vectors per chunk. A specialized helper can remove the generic exchange loops and repeated index expressions while preserving the exact same shared-memory permutation and float arithmetic.
+
+Change:
+- Temporarily added `exchange_smem_pre_2chunks_8elts_8warps`.
+- Routed only the matching fp16/bf16 dim 4096 main-kernel exchange shape through it.
+
+Result:
+- Artifact: `benchmark_results/exp132_16bit_4096_specialized_exchange_h200_20260528.json`.
+- fp16 dim 4096 regressed to 232.096 us versus 231.920 us in the accepted Exp126 repeat artifact.
+- bf16 dim 4096 was only noise-scale at 231.296 us versus 231.024 us accepted.
+- fp32 guardrails were normal because they did not use the specialized helper.
+- Decision: reject and keep the generic templated exchange helper.
