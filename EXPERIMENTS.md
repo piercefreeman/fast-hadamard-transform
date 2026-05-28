@@ -1816,3 +1816,17 @@ Result:
 - bf16 dim 8192 regressed to 236.768 us versus 235.360 us in the accepted Exp126 repeat artifact.
 - fp16/fp32 guardrails were normal.
 - Decision: reject and keep bf16 dim 8192 on the generic scalar boundary-conversion path.
+
+## Experiment 129: fp32 512/1024 Grouped One-Warp Retest
+
+Hypothesis: fp32 dims 512 and 1024 still have weak baseline-relative speedups and use one 32-thread block per row. Routing them through the existing grouped one-warp kernel with 8 rows per block may reduce block scheduling overhead while preserving fp32 arithmetic.
+
+Change:
+- Temporarily routed fp32 dim 512 and 1024 through `fast_hadamard_transform_one_warp_launch<8, ...>`.
+- Kept fp32 dims 256 and 2048 as guardrails.
+
+Result:
+- Artifact: `benchmark_results/exp129_fp32_512_1024_grouped_one_warp_h200_20260528.json`.
+- fp32 dim 512 regressed to 72.960 us versus 71.472 us in the accepted Exp126 repeat artifact.
+- fp32 dim 1024 regressed to 135.536 us versus 134.848 us in the accepted Exp126 repeat artifact.
+- Decision: reject and keep fp32 dims 512 and 1024 on the standard single-row 32-thread launches.
