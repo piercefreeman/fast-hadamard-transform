@@ -1335,3 +1335,55 @@ Result:
 - Artifact: `benchmark_results/exp094_fp16_32768_exact_specialized_h200_20260528.json`.
 - fp16 dim 32768 was neutral to slower at 307.120 us. bf16 and fp32 guardrails stayed near expected ranges.
 - Decision: reject and keep the generic exact-I/O route for fp16 dim 32768.
+
+## Experiment 095: 32 KiB Exchange Tile for 16-Bit Dim 16384
+
+Hypothesis: default fp16/bf16 dim 16384 may be occupancy-limited by the 64 KiB float exchange tile. Reducing the 16-bit dim 16384 exchange tile to 32 KiB adds an exchange round but may increase resident blocks enough to improve throughput while preserving float arithmetic.
+
+Change:
+- Temporarily changed only 16-bit dim 16384 main-kernel exchange storage from 64 KiB to 32 KiB.
+
+Result:
+- Artifact: `benchmark_results/exp095_16bit_16384_32k_exchange_h200_20260528.json`.
+- fp16 dim 16384 regressed to 248.320 us and bf16 dim 16384 regressed to 249.632 us.
+- fp32 guardrails were not directly affected by the conditional change and stayed in the expected range.
+- Decision: reject and keep the 64 KiB exchange tile for dim 16384.
+
+## Experiment 096: 16 KiB Exchange Tile for 16-Bit Dim 8192
+
+Hypothesis: default fp16/bf16 dim 8192 may benefit from improved block residency if its one-round 32 KiB exchange tile is reduced to a two-round 16 KiB tile.
+
+Change:
+- Temporarily changed only 16-bit dim 8192 main-kernel exchange storage from 32 KiB to 16 KiB.
+
+Result:
+- Artifact: `benchmark_results/exp096_16bit_8192_16k_exchange_h200_20260528.json`.
+- fp16 dim 8192 regressed to 240.160 us and bf16 dim 8192 regressed to 239.600 us.
+- Decision: reject and keep the one-round 32 KiB exchange tile for dim 8192.
+
+## Experiment 097: 16-Bit Main-Kernel Restrict for 4096-16384
+
+Hypothesis: global row-pointer `__restrict__` was bad for fp32 but showed small 16-bit movements. Restricting only default fp16/bf16 main-kernel routes for dims 4096 through 16384 may keep any aliasing/codegen benefit while avoiding fp32 regressions.
+
+Change:
+- Temporarily added an optional restrict-pointer instantiation for the generic main kernel.
+- Routed default fp16/bf16 dims 4096, 8192, and 16384 through the restrict-pointer instantiation.
+
+Result:
+- Artifact: `benchmark_results/exp097_16bit_main_restrict_4096_16384_h200_20260528.json`.
+- The common targeted geometric mean was 0.9984x versus the accepted Experiment 092 full artifact.
+- fp16 dims 8192 and 16384 improved slightly, but bf16 dim 8192 regressed and 4096 was neutral.
+- Decision: reject the broad 16-bit route and test only the positive fp16 subset.
+
+## Experiment 098: fp16 8192/16384 Restrict Subset
+
+Hypothesis: the only useful signal in Experiment 097 was fp16 dims 8192 and 16384. Restricting only those routes may preserve the small fp16 gain without affecting bf16.
+
+Change:
+- Temporarily routed only default fp16 dims 8192 and 16384 through the restrict-pointer instantiation.
+
+Result:
+- Artifact: `benchmark_results/exp098_fp16_8192_16384_selective_restrict_h200_20260528.json`.
+- fp16 dim 8192 was neutral/slightly worse at 237.696 us and fp16 dim 16384 was only noise-scale better at 245.840 us.
+- Guardrails drifted worse in the same targeted run.
+- Decision: reject and restore the generic non-restrict routes.
