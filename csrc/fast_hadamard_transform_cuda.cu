@@ -173,6 +173,266 @@ __device__ __forceinline__ void hadamard_mult_thread_chunk_40(float x[kNChunks][
     for (int c = 0; c < kNChunks; ++c) { hadamard_mult_thread_40(x[c]); }
 }
 
+template<int kNChunks, int kNElts, typename input_t>
+struct FloatIntermediateIO {
+    static inline __device__ void load(input_t *x, float x_vals[kNChunks][kNElts], int dim) {
+        load_input<kNChunks, kNElts, input_t>(x, x_vals, dim);
+    }
+
+    static inline __device__ void store(input_t *out, float out_vals[kNChunks][kNElts], int dim, float scale) {
+        store_output<kNChunks, kNElts, input_t>(out, out_vals, dim, scale);
+    }
+};
+
+template<int kNChunks>
+struct FloatIntermediateIO<kNChunks, 4, float> {
+    using vec_t = typename BytesToType<sizeof(float) * 4>::Type;
+
+    static inline __device__ void load(float *x, float x_vals[kNChunks][4], int dim) {
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            if ((c * blockDim.x + threadIdx.x) * 4 < dim) {
+                reinterpret_cast<vec_t *>(x_vals[c])[0] =
+                    reinterpret_cast<const vec_t *>(x)[c * blockDim.x + threadIdx.x];
+            } else {
+                #pragma unroll
+                for (int i = 0; i < 4; ++i) { x_vals[c][i] = 0.f; }
+            }
+        }
+    }
+
+    static inline __device__ void store(float *out, float out_vals[kNChunks][4], int dim, float scale) {
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            float out_vals_store[4];
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) { out_vals_store[i] = out_vals[c][i] * scale; }
+            if ((c * blockDim.x + threadIdx.x) * 4 < dim) {
+                reinterpret_cast<vec_t *>(out)[c * blockDim.x + threadIdx.x] =
+                    reinterpret_cast<const vec_t *>(out_vals_store)[0];
+            }
+        }
+    }
+};
+
+template<int kNChunks>
+struct FloatIntermediateIO<kNChunks, 8, at::Half> {
+    using vec_t = typename BytesToType<sizeof(at::Half) * 8>::Type;
+
+    static inline __device__ void load(at::Half *x, float x_vals[kNChunks][8], int dim) {
+        const __half *x_half = reinterpret_cast<const __half *>(x);
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            __half2 x_vals_load[4] = {
+                __float2half2_rn(0.f), __float2half2_rn(0.f),
+                __float2half2_rn(0.f), __float2half2_rn(0.f)
+            };
+            if ((c * blockDim.x + threadIdx.x) * 8 < dim) {
+                reinterpret_cast<vec_t *>(x_vals_load)[0] =
+                    reinterpret_cast<const vec_t *>(x_half)[c * blockDim.x + threadIdx.x];
+            }
+            #pragma unroll
+            for (int p = 0; p < 4; ++p) {
+                const float2 vals = __half22float2(x_vals_load[p]);
+                x_vals[c][2 * p] = vals.x;
+                x_vals[c][2 * p + 1] = vals.y;
+            }
+        }
+    }
+
+    static inline __device__ void store(at::Half *out, float out_vals[kNChunks][8], int dim, float scale) {
+        __half *out_half = reinterpret_cast<__half *>(out);
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            __half2 out_vals_store[4];
+            #pragma unroll
+            for (int p = 0; p < 4; ++p) {
+                out_vals_store[p] = __float22half2_rn(make_float2(
+                    out_vals[c][2 * p] * scale, out_vals[c][2 * p + 1] * scale));
+            }
+            if ((c * blockDim.x + threadIdx.x) * 8 < dim) {
+                reinterpret_cast<vec_t *>(out_half)[c * blockDim.x + threadIdx.x] =
+                    reinterpret_cast<const vec_t *>(out_vals_store)[0];
+            }
+        }
+    }
+};
+
+template<int kNChunks>
+struct FloatIntermediateIO<kNChunks, 8, at::BFloat16> {
+    using vec_t = typename BytesToType<sizeof(at::BFloat16) * 8>::Type;
+
+    static inline __device__ void load(at::BFloat16 *x, float x_vals[kNChunks][8], int dim) {
+        const __nv_bfloat16 *x_bfloat = reinterpret_cast<const __nv_bfloat16 *>(x);
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            __nv_bfloat162 x_vals_load[4] = {
+                __float2bfloat162_rn(0.f), __float2bfloat162_rn(0.f),
+                __float2bfloat162_rn(0.f), __float2bfloat162_rn(0.f)
+            };
+            if ((c * blockDim.x + threadIdx.x) * 8 < dim) {
+                reinterpret_cast<vec_t *>(x_vals_load)[0] =
+                    reinterpret_cast<const vec_t *>(x_bfloat)[c * blockDim.x + threadIdx.x];
+            }
+            #pragma unroll
+            for (int p = 0; p < 4; ++p) {
+                const float2 vals = __bfloat1622float2(x_vals_load[p]);
+                x_vals[c][2 * p] = vals.x;
+                x_vals[c][2 * p + 1] = vals.y;
+            }
+        }
+    }
+
+    static inline __device__ void store(at::BFloat16 *out, float out_vals[kNChunks][8], int dim, float scale) {
+        __nv_bfloat16 *out_bfloat = reinterpret_cast<__nv_bfloat16 *>(out);
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            __nv_bfloat162 out_vals_store[4];
+            #pragma unroll
+            for (int p = 0; p < 4; ++p) {
+                out_vals_store[p] = __float22bfloat162_rn(make_float2(
+                    out_vals[c][2 * p] * scale, out_vals[c][2 * p + 1] * scale));
+            }
+            if ((c * blockDim.x + threadIdx.x) * 8 < dim) {
+                reinterpret_cast<vec_t *>(out_bfloat)[c * blockDim.x + threadIdx.x] =
+                    reinterpret_cast<const vec_t *>(out_vals_store)[0];
+            }
+        }
+    }
+};
+
+template<int kNChunks, int kNElts, typename input_t>
+struct FloatIntermediateWarpIO {
+    static inline __device__ void load(input_t *x, float x_vals[kNChunks][kNElts], int dim, int lane_id) {
+        load_input_warp<kNChunks, kNElts, input_t>(x, x_vals, dim, lane_id);
+    }
+
+    static inline __device__ void store(
+        input_t *out, float out_vals[kNChunks][kNElts], int dim, int lane_id, float scale) {
+        store_output_warp<kNChunks, kNElts, input_t>(out, out_vals, dim, lane_id, scale);
+    }
+};
+
+template<int kNChunks>
+struct FloatIntermediateWarpIO<kNChunks, 4, float> {
+    using vec_t = typename BytesToType<sizeof(float) * 4>::Type;
+
+    static inline __device__ void load(float *x, float x_vals[kNChunks][4], int dim, int lane_id) {
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            if ((c * 32 + lane_id) * 4 < dim) {
+                reinterpret_cast<vec_t *>(x_vals[c])[0] =
+                    reinterpret_cast<const vec_t *>(x)[c * 32 + lane_id];
+            } else {
+                #pragma unroll
+                for (int i = 0; i < 4; ++i) { x_vals[c][i] = 0.f; }
+            }
+        }
+    }
+
+    static inline __device__ void store(
+        float *out, float out_vals[kNChunks][4], int dim, int lane_id, float scale) {
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            float out_vals_store[4];
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) { out_vals_store[i] = out_vals[c][i] * scale; }
+            if ((c * 32 + lane_id) * 4 < dim) {
+                reinterpret_cast<vec_t *>(out)[c * 32 + lane_id] =
+                    reinterpret_cast<const vec_t *>(out_vals_store)[0];
+            }
+        }
+    }
+};
+
+template<int kNChunks>
+struct FloatIntermediateWarpIO<kNChunks, 8, at::Half> {
+    using vec_t = typename BytesToType<sizeof(at::Half) * 8>::Type;
+
+    static inline __device__ void load(at::Half *x, float x_vals[kNChunks][8], int dim, int lane_id) {
+        const __half *x_half = reinterpret_cast<const __half *>(x);
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            __half2 x_vals_load[4] = {
+                __float2half2_rn(0.f), __float2half2_rn(0.f),
+                __float2half2_rn(0.f), __float2half2_rn(0.f)
+            };
+            if ((c * 32 + lane_id) * 8 < dim) {
+                reinterpret_cast<vec_t *>(x_vals_load)[0] =
+                    reinterpret_cast<const vec_t *>(x_half)[c * 32 + lane_id];
+            }
+            #pragma unroll
+            for (int p = 0; p < 4; ++p) {
+                const float2 vals = __half22float2(x_vals_load[p]);
+                x_vals[c][2 * p] = vals.x;
+                x_vals[c][2 * p + 1] = vals.y;
+            }
+        }
+    }
+
+    static inline __device__ void store(
+        at::Half *out, float out_vals[kNChunks][8], int dim, int lane_id, float scale) {
+        __half *out_half = reinterpret_cast<__half *>(out);
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            __half2 out_vals_store[4];
+            #pragma unroll
+            for (int p = 0; p < 4; ++p) {
+                out_vals_store[p] = __float22half2_rn(make_float2(
+                    out_vals[c][2 * p] * scale, out_vals[c][2 * p + 1] * scale));
+            }
+            if ((c * 32 + lane_id) * 8 < dim) {
+                reinterpret_cast<vec_t *>(out_half)[c * 32 + lane_id] =
+                    reinterpret_cast<const vec_t *>(out_vals_store)[0];
+            }
+        }
+    }
+};
+
+template<int kNChunks>
+struct FloatIntermediateWarpIO<kNChunks, 8, at::BFloat16> {
+    using vec_t = typename BytesToType<sizeof(at::BFloat16) * 8>::Type;
+
+    static inline __device__ void load(at::BFloat16 *x, float x_vals[kNChunks][8], int dim, int lane_id) {
+        const __nv_bfloat16 *x_bfloat = reinterpret_cast<const __nv_bfloat16 *>(x);
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            __nv_bfloat162 x_vals_load[4] = {
+                __float2bfloat162_rn(0.f), __float2bfloat162_rn(0.f),
+                __float2bfloat162_rn(0.f), __float2bfloat162_rn(0.f)
+            };
+            if ((c * 32 + lane_id) * 8 < dim) {
+                reinterpret_cast<vec_t *>(x_vals_load)[0] =
+                    reinterpret_cast<const vec_t *>(x_bfloat)[c * 32 + lane_id];
+            }
+            #pragma unroll
+            for (int p = 0; p < 4; ++p) {
+                const float2 vals = __bfloat1622float2(x_vals_load[p]);
+                x_vals[c][2 * p] = vals.x;
+                x_vals[c][2 * p + 1] = vals.y;
+            }
+        }
+    }
+
+    static inline __device__ void store(
+        at::BFloat16 *out, float out_vals[kNChunks][8], int dim, int lane_id, float scale) {
+        __nv_bfloat16 *out_bfloat = reinterpret_cast<__nv_bfloat16 *>(out);
+        #pragma unroll
+        for (int c = 0; c < kNChunks; ++c) {
+            __nv_bfloat162 out_vals_store[4];
+            #pragma unroll
+            for (int p = 0; p < 4; ++p) {
+                out_vals_store[p] = __float22bfloat162_rn(make_float2(
+                    out_vals[c][2 * p] * scale, out_vals[c][2 * p + 1] * scale));
+            }
+            if ((c * 32 + lane_id) * 8 < dim) {
+                reinterpret_cast<vec_t *>(out_bfloat)[c * 32 + lane_id] =
+                    reinterpret_cast<const vec_t *>(out_vals_store)[0];
+            }
+        }
+    }
+};
+
 template<typename Ktraits, bool kUseConditionalWarp = false>
 __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardParamsBase params, char *smem_) {
     constexpr int kNThreads = Ktraits::kNThreads;
@@ -209,7 +469,15 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
     input_t *out = reinterpret_cast<input_t *>(params.out_ptr) + batch_id * params.out_batch_stride;
 
     float x_vals[kNChunks][kNElts];
-    load_input<kNChunks, kNElts, input_t>(x, x_vals, params.dim);
+    constexpr bool kUseGenericIO =
+        (std::is_same_v<input_t, float> && Ktraits::N == 32 * 1024) ||
+        (std::is_same_v<input_t, at::BFloat16> && kNElts == 8 &&
+         Ktraits::N != 4 * 1024 && Ktraits::N != 16 * 1024);
+    if constexpr (kUseGenericIO) {
+        load_input<kNChunks, kNElts, input_t>(x, x_vals, params.dim);
+    } else {
+        FloatIntermediateIO<kNChunks, kNElts, input_t>::load(x, x_vals, params.dim);
+    }
 
     hadamard_mult_thread<kLogNElts, kNChunks>(x_vals);
     if constexpr (kUseConditionalWarp) {
@@ -257,7 +525,11 @@ __device__ __forceinline__ void fast_hadamard_transform_kernel_body(HadamardPara
         }
     }
 
-    store_output<kNChunks, kNElts, input_t>(out, x_vals, params.dim, params.scale);
+    if constexpr (kUseGenericIO) {
+        store_output<kNChunks, kNElts, input_t>(out, x_vals, params.dim, params.scale);
+    } else {
+        FloatIntermediateIO<kNChunks, kNElts, input_t>::store(out, x_vals, params.dim, params.scale);
+    }
 }
 
 template<typename Ktraits, bool kUseConditionalWarp = false>
@@ -906,7 +1178,7 @@ void fast_hadamard_transform_one_warp_kernel(HadamardParamsBase params) {
     input_t *out = reinterpret_cast<input_t *>(params.out_ptr) + batch_id * params.out_batch_stride;
 
     float x_vals[kNChunks][kNElts];
-    load_input_warp<kNChunks, kNElts, input_t>(x, x_vals, params.dim, lane_id);
+    FloatIntermediateWarpIO<kNChunks, kNElts, input_t>::load(x, x_vals, params.dim, lane_id);
 
     hadamard_mult_thread<kLogNElts, kNChunks>(x_vals);
     hadamard_mult_warp<5, 0, kNChunks, kNElts>(x_vals);
@@ -928,7 +1200,7 @@ void fast_hadamard_transform_one_warp_kernel(HadamardParamsBase params) {
         }
     }
 
-    store_output_warp<kNChunks, kNElts, input_t>(out, x_vals, params.dim, lane_id, params.scale);
+    FloatIntermediateWarpIO<kNChunks, kNElts, input_t>::store(out, x_vals, params.dim, lane_id, params.scale);
 }
 
 template<int kNThreads, int kLogN, typename input_t, bool kUseConditionalWarp = false>

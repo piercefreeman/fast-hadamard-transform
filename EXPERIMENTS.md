@@ -869,3 +869,150 @@ Result:
   - fp32 max abs: 0.000000775 to 0.000004053.
 - Decision: keep the selective sync skip. It does not change arithmetic precision, and native `half2`/`bfloat162` arithmetic remains behind `fast_low_precision=True`.
 - The default precision-preserving path still does not meet the requested 50% aggregate speedup. The opt-in fast low-precision path remains the only measured route near 1.5x, at about 1.496x in the latest full repeat.
+
+## Experiment 058: Vectorized Float-Intermediate I/O for Large 16-Bit Defaults
+
+Hypothesis: fp16/bf16 default kernels may spend meaningful time unpacking input values to float and packing float results back to 16-bit scalars. Vectorized half2/bfloat162 conversion can reduce that boundary overhead while keeping all transform arithmetic in float.
+
+Change:
+- Added vectorized load/store conversion for both fp16 and bf16 `kNElts == 8` main kernels.
+- The transform still stores intermediates as float and uses float add/sub math.
+
+Result:
+- Artifact: `benchmark_results/exp058_vectorized_float_io_default_large_h200_20260528.json`.
+- fp16 large cases improved or stayed close; fp16 dim 32768 moved to 308.624 us.
+- bf16 dim 32768 regressed badly to 365.344 us.
+- Correctness max-abs values matched the prior float-intermediate benchmark samples.
+- Decision: reject the broad bf16 route and narrow the vectorized conversion path.
+
+## Experiment 059: fp16-Only Vectorized Main I/O
+
+Hypothesis: the vectorized conversion path is useful for fp16 main kernels while bf16 large kernels need more selective handling.
+
+Change:
+- Kept vectorized conversion for fp16 `kNElts == 8` main kernels.
+- Restored bf16 main kernels to the scalar conversion path.
+
+Result:
+- Artifact: `benchmark_results/exp059_fp16_vectorized_float_io_default_large_h200_20260528.json`.
+- fp16 dim 32768 improved to 308.288 us; fp16 dims 4096 and 16384 also improved modestly.
+- bf16 dim 32768 returned to the expected range at 343.104 us.
+- Correctness max-abs values were unchanged versus Experiment 057 for the sampled cases.
+- Decision: accept the fp16 main-kernel vectorized conversion path.
+
+## Experiment 060: fp16 Vectorized One-Warp I/O
+
+Hypothesis: the same fp16 conversion overhead matters in one-warp default kernels, especially dim 2048 where the current default path is still visibly above clone time.
+
+Change:
+- Added vectorized fp16 conversion for one-warp default kernels.
+
+Result:
+- Artifact: `benchmark_results/exp060_fp16_vectorized_float_io_all_default_h200_20260528.json`.
+- fp16 dim 2048 improved from 145.216 us in the prior repeat to 134.624 us.
+- fp16 dims 256, 512, 1024, 4096, 16384, and 32768 also improved; fp16 dim 8192 was effectively neutral.
+- Correctness max-abs values were unchanged versus Experiment 057.
+- Decision: accept.
+
+## Experiment 061: Direct fp32 Float I/O
+
+Hypothesis: fp32 kernels do not need scalar copy-through staging at load time because the input is already float. Direct vector load/store into the float register tile can reduce instruction overhead.
+
+Change:
+- Added direct vectorized fp32 load/store for main and one-warp float-intermediate kernels.
+
+Result:
+- Artifact: `benchmark_results/exp061_fp32_direct_float_io_h200_20260528.json`.
+- fp32 dims 4096, 8192, and 16384 improved to 141.856 us, 142.752 us, and 149.456 us.
+- fp32 dim 32768 regressed to 198.528 us.
+- Decision: narrow the fp32 direct-I/O path away from dim 32768.
+
+## Experiment 062: Direct fp32 I/O Except 32768
+
+Hypothesis: keeping the generic fp32 I/O path for dim 32768 preserves that case while retaining direct-I/O gains for smaller fp32 dimensions.
+
+Change:
+- Excluded fp32 dim 32768 from the direct main-kernel I/O specialization.
+
+Result:
+- Artifact: `benchmark_results/exp062_fp32_direct_float_io_except_32768_h200_20260528.json`.
+- fp32 dim 32768 returned to 196.816 us.
+- fp32 dims 4096, 8192, and 16384 remained improved at 142.176 us, 143.040 us, and 149.744 us.
+- Decision: accept the selective fp32 direct-I/O path.
+
+## Experiments 063-065: fp32 32768 Launch and Sync Retests
+
+Hypothesis: after direct I/O, fp32 dim 32768 or fp32 dim 4096 may respond differently to prior rejected launch and synchronization variants.
+
+Change:
+- Tested fp32 dim 32768 with 1024 threads.
+- Tested fp32 dim 32768 with 256 threads.
+- Tested an fp32 dim 4096 initial pre-exchange sync skip.
+
+Result:
+- Artifacts:
+  - `benchmark_results/exp063_fp32_32768_1024_threads_h200_20260528.json`.
+  - `benchmark_results/exp064_fp32_32768_256_threads_h200_20260528.json`.
+  - `benchmark_results/exp065_fp32_4096_sync_skip_h200_20260528.json`.
+- fp32 dim 32768 regressed to 198.864 us with 1024 threads and 245.920 us with 256 threads.
+- fp32 dim 4096 regressed to 150.240 us with the sync skip.
+- Decision: reject all three; keep fp32 dim 32768 at 512 threads and keep the fp32 initial barrier.
+
+## Experiment 066: bf16 Vectorized One-Warp I/O
+
+Hypothesis: bf16 one-warp kernels may benefit from vectorized bfloat162 conversion even though the broad bf16 main-kernel route regressed at dim 32768.
+
+Change:
+- Added vectorized bf16 conversion for one-warp default kernels only.
+
+Result:
+- Artifact: `benchmark_results/exp066_bf16_one_warp_vectorized_float_io_h200_20260528.json`.
+- bf16 dim 2048 improved from 156.192 us in the prior repeat to 136.784 us.
+- bf16 dims 256, 512, and 1024 also improved modestly.
+- Correctness max-abs values were unchanged versus Experiment 057.
+- Decision: accept.
+
+## Experiment 067: Selective bf16 Main Vectorized I/O
+
+Hypothesis: bf16 main-kernel vectorized conversion should only be used where Experiment 058 showed benefit, avoiding dims 8192 and 32768.
+
+Change:
+- Enabled vectorized bf16 main-kernel conversion only for dims 4096 and 16384.
+- Kept bf16 dims 8192 and 32768 on generic scalar conversion.
+
+Result:
+- Artifact: `benchmark_results/exp067_bf16_selective_main_vectorized_float_io_h200_20260528.json`.
+- bf16 dim 16384 improved to 247.504 us; bf16 dim 4096 was effectively neutral at 233.168 us.
+- bf16 dim 32768 stayed in the expected range at 343.344 us.
+- Decision: accept the selective route.
+
+## Current Default Precision State After Experiment 068
+
+Result:
+- Full default precision-preserving artifacts:
+  - `benchmark_results/current_default_precision_exp068_vectorized_io_full_h200_20260528.json`: 118.770 us geometric mean, 1.276x over baseline.
+  - `benchmark_results/current_default_precision_exp068_vectorized_io_full_h200_20260528_repeat2.json`: 118.921 us geometric mean, 1.275x over baseline.
+- Dtype geometric-mean speedups in the repeat artifact: fp16 1.374x, bf16 1.345x, fp32 1.121x.
+- Correctness/unit verification after final rebuild: `uv run --no-project pytest -q tests/test_fast_hadamard_transform.py`, 55 passed.
+- Default-path precision spot check versus fp32 reference over dims 256 through 32768:
+  - fp16 max abs: 0.000968 to 0.001886.
+  - bf16 max abs: 0.007407 to 0.015617.
+  - fp32 max abs: 0.000000715 to 0.000003278.
+- Decision: keep the vectorized I/O specializations. They change conversion packing only and preserve float-intermediate arithmetic.
+- The default precision-preserving path is now about 27.5% faster than the original baseline by geometric mean, still well short of the requested 50% default target.
+
+## Experiments 069-070: Conditional Add/Sub Retests
+
+Hypothesis: after vectorized I/O, conditional add/sub may become useful for more fp32 large routes or one-warp default kernels.
+
+Change:
+- Tested conditional add/sub for fp32 dims 4096, 8192, and 32768.
+- Tested conditional add/sub in the one-warp default kernel.
+
+Result:
+- Artifacts:
+  - `benchmark_results/exp069_fp32_large_conditional_addsub_with_direct_io_h200_20260528.json`.
+  - `benchmark_results/exp070_one_warp_conditional_addsub_h200_20260528.json`.
+- fp32 dim 32768 regressed to 204.192 us, and fp32 dim 4096 regressed to 144.800 us.
+- One-warp conditional add/sub regressed the important fp16/bf16 dim 2048 cases to 144.336 us and 144.608 us.
+- Decision: reject both retests. Keep conditional add/sub only on the previously accepted fp32 dim 16384 and bf16 dim 32768 routes.
