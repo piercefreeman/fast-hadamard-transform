@@ -1651,3 +1651,17 @@ Result:
 - bf16 dim 16384 regressed to 243.744 us versus the accepted 242.112 us full-sweep value.
 - bf16 dim 4096 was only noise-scale better at 231.072 us.
 - Decision: reject and keep the normal vectorized bf16 load path outside the specialized 32768 route.
+
+## Experiment 118: Selective Direct Chunk Stage
+
+Hypothesis: Experiment 088 had small isolated wins from avoiding the transpose-based final chunk stage, especially fp32 dim 8192 and fp16 dim 4096. Retesting only those routes under the current code may capture the useful part without broad regressions.
+
+Change:
+- Temporarily added an optional direct power-of-two chunk-stage helper.
+- Routed only default fp16 dim 4096 and fp32 dim 8192 through it.
+
+Result:
+- Artifact: `benchmark_results/exp118_selective_direct_chunk_stage_h200_20260528.json`.
+- fp32 dim 8192 measured 141.728 us, slower than the accepted full-sweep value of 141.376 us.
+- fp16 dim 4096 measured 231.664 us, a noise-scale movement relative to the accepted 231.776 us.
+- Decision: reject and keep the transpose-based chunk stage.
